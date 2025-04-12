@@ -16,6 +16,10 @@ if (!YOUTUBE_API_KEY) {
 const videoCache: Record<string, Video[]> = {};
 let nextPageTokens: Record<string, string | null> = {};
 
+// Cache expiration time (15 minutes)
+const CACHE_EXPIRATION = 15 * 60 * 1000;
+const cacheTimestamps: Record<string, number> = {};
+
 // YouTube Categories mapped to YouTube API category IDs
 export const YOUTUBE_CATEGORIES = {
   All: null, // Special case for mixed content
@@ -26,6 +30,17 @@ export const YOUTUBE_CATEGORIES = {
   Movies: "1", // Film & Animation
   Sports: "17",
   Technology: "28",
+};
+
+// Preload common categories to improve perceived performance
+export const preloadCommonCategories = async (): Promise<void> => {
+  // Preload trending videos in the background
+  try {
+    await fetchVideosByCategory("Trending", 5, true);
+    console.log("Preloaded trending videos");
+  } catch (error) {
+    console.error("Error preloading trending videos:", error);
+  }
 };
 
 // Format a YouTube API response item to our Video interface
@@ -76,6 +91,67 @@ const formatTimeAgo = (date: Date): string => {
   return `${diffInYears} years ago`;
 };
 
+// Check if cache is expired
+const isCacheExpired = (cacheKey: string): boolean => {
+  if (!cacheTimestamps[cacheKey]) return true;
+  return Date.now() - cacheTimestamps[cacheKey] > CACHE_EXPIRATION;
+};
+
+// Enhanced fetch function with optimized parameters and ad filtering
+const fetchFromYouTubeAPI = async (endpoint: string, params: Record<string, string>): Promise<YouTubeApiResponse> => {
+  // Add API key to params
+  const queryParams = new URLSearchParams({
+    ...params,
+    key: YOUTUBE_API_KEY || "",
+  });
+  
+  // Create the URL
+  const url = `${YOUTUBE_API_URL}/${endpoint}?${queryParams.toString()}`;
+  
+  // Fetch with timeout to avoid hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+  
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      throw new Error(`YouTube API error: ${response.statusText}`);
+    }
+    
+    const data: YouTubeApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if ((error as Error).name === 'AbortError') {
+      throw new Error('Request timed out');
+    }
+    throw error;
+  }
+};
+
+// Function to filter out videos that might be ads or inappropriate
+const filterAdsAndPoorContent = (videos: Video[]): Video[] => {
+  // Keywords that might indicate promotional/ad content
+  const adKeywords = [
+    'promo', 'promotion', 'sponsor', 'ad:', 'ads:', 'advertisement', 
+    'deal', 'buy now', 'limited time offer', 'subscribe'
+  ];
+  
+  return videos.filter(video => {
+    const titleLower = video.title.toLowerCase();
+    
+    // Filter videos with potential ad-related keywords
+    const hasAdKeywords = adKeywords.some(keyword => titleLower.includes(keyword.toLowerCase()));
+    
+    // Also filter very short videos (< 30 seconds) which might be ads
+    // Note: We can't reliably check duration here without extra API calls
+    
+    return !hasAdKeywords;
+  });
+};
+
 // Function to fetch videos by category
 export const fetchVideosByCategory = async (
   category: string,
@@ -84,8 +160,8 @@ export const fetchVideosByCategory = async (
 ): Promise<Video[]> => {
   const cacheKey = `category_${category}`;
   
-  // Clear the cache if requested or if we're starting a new category
-  if (resetCache) {
+  // Clear the cache if requested, if we're starting a new category, or if cache expired
+  if (resetCache || isCacheExpired(cacheKey)) {
     videoCache[cacheKey] = [];
     nextPageTokens[cacheKey] = null;
   }
@@ -100,29 +176,27 @@ export const fetchVideosByCategory = async (
     
     if (category === "All") {
       // For "All" category, fetch a mix of popular videos
-      const response = await fetch(
-        `${YOUTUBE_API_URL}/videos?part=snippet,statistics&chart=mostPopular&maxResults=${count}&key=${YOUTUBE_API_KEY}`
-      );
+      const data = await fetchFromYouTubeAPI('videos', {
+        part: 'snippet,statistics',
+        chart: 'mostPopular',
+        maxResults: (count * 1.5).toString(), // Request extra videos to account for filtering
+        regionCode: 'US',
+        videoCategoryId: '', // No specific category
+        relevanceLanguage: 'en',
+      });
       
-      if (!response.ok) {
-        throw new Error(`YouTube API error: ${response.statusText}`);
-      }
-      
-      const data: YouTubeApiResponse = await response.json();
       newVideos = data.items.map(formatVideoItem);
       nextPageTokens[cacheKey] = data.nextPageToken || null;
       
     } else if (category === "Trending") {
       // For trending, we also use mostPopular but with a smaller result set
-      const response = await fetch(
-        `${YOUTUBE_API_URL}/videos?part=snippet,statistics&chart=mostPopular&maxResults=${count}&key=${YOUTUBE_API_KEY}`
-      );
+      const data = await fetchFromYouTubeAPI('videos', {
+        part: 'snippet,statistics',
+        chart: 'mostPopular',
+        maxResults: (count * 1.5).toString(),
+        regionCode: 'US',
+      });
       
-      if (!response.ok) {
-        throw new Error(`YouTube API error: ${response.statusText}`);
-      }
-      
-      const data: YouTubeApiResponse = await response.json();
       newVideos = data.items.map(formatVideoItem);
       nextPageTokens[cacheKey] = data.nextPageToken || null;
       
@@ -130,21 +204,22 @@ export const fetchVideosByCategory = async (
       // For specific categories, use the videoCategoryId
       const categoryId = YOUTUBE_CATEGORIES[category as keyof typeof YOUTUBE_CATEGORIES];
       if (categoryId) {
-        const response = await fetch(
-          `${YOUTUBE_API_URL}/videos?part=snippet,statistics&chart=mostPopular&videoCategoryId=${categoryId}&maxResults=${count}${
-            nextPageTokens[cacheKey] ? `&pageToken=${nextPageTokens[cacheKey]}` : ""
-          }&key=${YOUTUBE_API_KEY}`
-        );
+        const data = await fetchFromYouTubeAPI('videos', {
+          part: 'snippet,statistics',
+          chart: 'mostPopular',
+          videoCategoryId: categoryId,
+          maxResults: (count * 1.5).toString(),
+          pageToken: nextPageTokens[cacheKey] || '',
+          regionCode: 'US',
+        });
         
-        if (!response.ok) {
-          throw new Error(`YouTube API error: ${response.statusText}`);
-        }
-        
-        const data: YouTubeApiResponse = await response.json();
         newVideos = data.items.map(formatVideoItem);
         nextPageTokens[cacheKey] = data.nextPageToken || null;
       }
     }
+    
+    // Filter out potential ads
+    newVideos = filterAdsAndPoorContent(newVideos);
     
     // Cache the results
     if (!videoCache[cacheKey]) {
@@ -153,12 +228,13 @@ export const fetchVideosByCategory = async (
     
     // Add new videos to cache
     videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+    cacheTimestamps[cacheKey] = Date.now();
     
     return videoCache[cacheKey].slice(0, count);
     
   } catch (error) {
     console.error("Error fetching videos:", error);
-    return [];
+    return videoCache[cacheKey] || [];
   }
 };
 
@@ -179,40 +255,36 @@ export const fetchMoreVideos = async (
     let newVideos: Video[] = [];
     
     if (category === "All" || category === "Trending") {
-      // For "All" or "Trending" category, fetch a mix of popular videos
-      const response = await fetch(
-        `${YOUTUBE_API_URL}/videos?part=snippet,statistics&chart=mostPopular&maxResults=${count}${
-          nextPageTokens[cacheKey] ? `&pageToken=${nextPageTokens[cacheKey]}` : ""
-        }&key=${YOUTUBE_API_KEY}`
-      );
+      const data = await fetchFromYouTubeAPI('videos', {
+        part: 'snippet,statistics',
+        chart: 'mostPopular',
+        maxResults: (count * 1.5).toString(),
+        pageToken: nextPageTokens[cacheKey] || '',
+        regionCode: 'US',
+      });
       
-      if (!response.ok) {
-        throw new Error(`YouTube API error: ${response.statusText}`);
-      }
-      
-      const data: YouTubeApiResponse = await response.json();
       newVideos = data.items.map(formatVideoItem);
       nextPageTokens[cacheKey] = data.nextPageToken || null;
       
     } else {
-      // For specific categories, use the videoCategoryId
       const categoryId = YOUTUBE_CATEGORIES[category as keyof typeof YOUTUBE_CATEGORIES];
       if (categoryId) {
-        const response = await fetch(
-          `${YOUTUBE_API_URL}/videos?part=snippet,statistics&chart=mostPopular&videoCategoryId=${categoryId}&maxResults=${count}${
-            nextPageTokens[cacheKey] ? `&pageToken=${nextPageTokens[cacheKey]}` : ""
-          }&key=${YOUTUBE_API_KEY}`
-        );
+        const data = await fetchFromYouTubeAPI('videos', {
+          part: 'snippet,statistics',
+          chart: 'mostPopular',
+          videoCategoryId: categoryId,
+          maxResults: (count * 1.5).toString(),
+          pageToken: nextPageTokens[cacheKey] || '',
+          regionCode: 'US',
+        });
         
-        if (!response.ok) {
-          throw new Error(`YouTube API error: ${response.statusText}`);
-        }
-        
-        const data: YouTubeApiResponse = await response.json();
         newVideos = data.items.map(formatVideoItem);
         nextPageTokens[cacheKey] = data.nextPageToken || null;
       }
     }
+    
+    // Filter out potential ads
+    newVideos = filterAdsAndPoorContent(newVideos);
     
     if (!videoCache[cacheKey]) {
       videoCache[cacheKey] = [];
@@ -220,6 +292,7 @@ export const fetchMoreVideos = async (
     
     // Add new videos to cache
     videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+    cacheTimestamps[cacheKey] = Date.now();
     
     // Return only the newly added videos
     return videoCache[cacheKey].slice(currentCount);
@@ -230,49 +303,73 @@ export const fetchMoreVideos = async (
   }
 };
 
-// Function to search for videos
+// Enhanced search debounce management
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const searchDebounceDelay = 300; // milliseconds
+
+// Enhanced search function
 export const searchVideos = async (query: string, count: number = 20): Promise<Video[]> => {
-  const cacheKey = `search_${query}`;
+  if (!query.trim()) return [];
   
-  // If we have cached results for this search, return them
-  if (videoCache[cacheKey]) {
+  const cacheKey = `search_${query.toLowerCase()}`;
+  
+  // If we have cached results for this search and they're not expired, return them
+  if (videoCache[cacheKey] && !isCacheExpired(cacheKey)) {
     return videoCache[cacheKey];
   }
   
   try {
-    // Make a real search API call
-    const response = await fetch(
-      `${YOUTUBE_API_URL}/search?part=snippet&q=${encodeURIComponent(
-        query
-      )}&maxResults=${count}&type=video&key=${YOUTUBE_API_KEY}`
-    );
+    // First, search for videos matching the query
+    const searchData = await fetchFromYouTubeAPI('search', {
+      part: 'snippet',
+      q: query,
+      maxResults: (count * 1.5).toString(), // Get extra results to account for filtering
+      type: 'video',
+      videoEmbeddable: 'true', // Only videos that can be embedded
+      safeSearch: 'moderate', // Filter out inappropriate content
+      relevanceLanguage: 'en',
+    });
     
-    if (!response.ok) {
-      throw new Error(`YouTube API error: ${response.statusText}`);
-    }
-    
-    const data: YouTubeApiResponse = await response.json();
-    
-    // For search results, we need to make a second API call to get video statistics
-    const videoIds = data.items.map((item: any) => item.id.videoId).join(",");
-    
-    if (!videoIds) {
+    // Early exit if no results
+    if (!searchData.items.length) {
+      videoCache[cacheKey] = [];
+      cacheTimestamps[cacheKey] = Date.now();
       return [];
     }
     
-    const videosResponse = await fetch(
-      `${YOUTUBE_API_URL}/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`
-    );
+    // Extract video IDs for detailed info
+    const videoIds = searchData.items
+      .map((item: any) => item.id.videoId)
+      .filter(Boolean)
+      .join(",");
     
-    if (!videosResponse.ok) {
-      throw new Error(`YouTube API error: ${videosResponse.statusText}`);
+    if (!videoIds) {
+      videoCache[cacheKey] = [];
+      cacheTimestamps[cacheKey] = Date.now();
+      return [];
     }
     
-    const videosData: YouTubeApiResponse = await videosResponse.json();
-    const videos = videosData.items.map(formatVideoItem);
+    // Get detailed info for those videos including statistics
+    const videosData = await fetchFromYouTubeAPI('videos', {
+      part: 'snippet,statistics',
+      id: videoIds,
+    });
+    
+    let videos = videosData.items.map(formatVideoItem);
+    
+    // Filter out potential ads
+    videos = filterAdsAndPoorContent(videos);
+    
+    // Sort by relevance and view count (combined ranking)
+    videos.sort((a, b) => {
+      const viewsA = parseInt(a.views.replace(/[^0-9]/g, '')) || 0;
+      const viewsB = parseInt(b.views.replace(/[^0-9]/g, '')) || 0;
+      return viewsB - viewsA;
+    });
     
     // Cache the results
     videoCache[cacheKey] = videos;
+    cacheTimestamps[cacheKey] = Date.now();
     
     return videos;
     
@@ -280,4 +377,21 @@ export const searchVideos = async (query: string, count: number = 20): Promise<V
     console.error("Error searching videos:", error);
     return [];
   }
+};
+
+// Debounced search function to prevent excessive API calls
+export const debouncedSearchVideos = (
+  query: string, 
+  callback: (videos: Video[]) => void
+): void => {
+  // Clear previous timer
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+  }
+  
+  // Set new timer
+  searchDebounceTimer = setTimeout(async () => {
+    const results = await searchVideos(query);
+    callback(results);
+  }, searchDebounceDelay);
 }; 

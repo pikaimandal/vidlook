@@ -1,11 +1,16 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import VideoPlayer from "@/components/video-player"
 import SearchBar from "@/components/search-bar"
 import VideoCategories, { type VideoCategory } from "@/components/video-categories"
-import { fetchVideosByCategory, fetchMoreVideos, searchVideos, YOUTUBE_CATEGORIES } from "@/lib/youtube-api"
+import { 
+  fetchVideosByCategory, 
+  fetchMoreVideos, 
+  debouncedSearchVideos,
+  preloadCommonCategories
+} from "@/lib/youtube-api"
 import { Video } from "@/types/video"
 
 // We'll keep a smaller set of hardcoded videos as backup in case the API fails
@@ -33,6 +38,7 @@ const FALLBACK_VIDEOS = {
 export default function VideoFeed() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
+  const [searchLoading, setSearchLoading] = useState(false)
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0)
   const [activeCategory, setActiveCategory] = useState<VideoCategory>("All")
   const [searchQuery, setSearchQuery] = useState("")
@@ -40,64 +46,67 @@ export default function VideoFeed() {
   const lastVideoElementRef = useRef<HTMLDivElement | null>(null)
   const [hasMoreVideos, setHasMoreVideos] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Handle category change - fetch videos from API
-  const handleCategoryChange = async (category: VideoCategory) => {
+  const handleCategoryChange = useCallback(async (category: VideoCategory) => {
     setActiveCategory(category)
     setLoading(true)
     setCurrentVideoIndex(0)
     setHasMoreVideos(true)
+    setError(null)
+    setSearchQuery("") // Clear search when changing category
 
     try {
       const newVideos = await fetchVideosByCategory(category, 10, true);
       setVideos(newVideos);
     } catch (error) {
       console.error("Error fetching videos:", error);
-      // Fallback to hardcoded videos if API fails
-      const fallbackCategory = FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS] || FALLBACK_VIDEOS.Trending;
-      setVideos(fallbackCategory);
+      setError("Failed to load videos. Please try again.");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  // Handle search
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query)
-    setLoading(true)
-    setCurrentVideoIndex(0)
-    setHasMoreVideos(true)
-
-    if (!query) {
-      handleCategoryChange(activeCategory)
-      return
+  // Handle search with optimized function
+  const handleSearch = useCallback((query: string) => {
+    setSearchQuery(query);
+    
+    if (!query.trim()) {
+      handleCategoryChange(activeCategory);
+      return;
     }
+    
+    setSearchLoading(true);
+    setError(null);
+    
+    // Use the debounced search function to prevent excessive API calls
+    debouncedSearchVideos(query, (results) => {
+      setVideos(results);
+      setSearchLoading(false);
+      if (results.length === 0) {
+        setError("No videos found matching your search.");
+      }
+    });
+  }, [activeCategory, handleCategoryChange]);
 
-    try {
-      const searchResults = await searchVideos(query, 20);
-      setVideos(searchResults);
-    } catch (error) {
-      console.error("Error searching videos:", error);
-      setVideos([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Initialize videos
+  // Initialize videos and preload common categories for better UX
   useEffect(() => {
-    handleCategoryChange("All")
-  }, [])
+    handleCategoryChange("All");
+    
+    // Preload other categories in the background for faster navigation
+    preloadCommonCategories().catch(console.error);
+  }, [handleCategoryChange]);
 
-  // Set up infinite scroll
+  // Set up infinite scroll with optimized loading
   useEffect(() => {
-    if (loading || loadingMore || !hasMoreVideos) return
+    if (loading || loadingMore || !hasMoreVideos || searchQuery) return;
 
-    if (observer.current) observer.current.disconnect()
+    if (observer.current) observer.current.disconnect();
 
     observer.current = new IntersectionObserver(async (entries) => {
-      if (entries[0].isIntersecting && !searchQuery) {
-        setLoadingMore(true)
+      if (entries[0].isIntersecting) {
+        setLoadingMore(true);
         try {
           // Fetch more videos when user scrolls to the bottom
           const newVideos = await fetchMoreVideos(activeCategory, 5);
@@ -114,30 +123,36 @@ export default function VideoFeed() {
           setLoadingMore(false);
         }
       }
-    })
+    }, {
+      rootMargin: '200px', // Load videos before user reaches the bottom
+      threshold: 0.1
+    });
 
     if (lastVideoElementRef.current) {
-      observer.current.observe(lastVideoElementRef.current)
+      observer.current.observe(lastVideoElementRef.current);
     }
 
     return () => {
-      if (observer.current) observer.current.disconnect()
-    }
-  }, [videos, loading, activeCategory, searchQuery, loadingMore, hasMoreVideos])
+      if (observer.current) observer.current.disconnect();
+    };
+  }, [videos, loading, activeCategory, searchQuery, loadingMore, hasMoreVideos]);
 
   // Handle video end - go to next video
-  const handleVideoEnd = () => {
+  const handleVideoEnd = useCallback(() => {
     // Only auto advance if not the last video
     if (currentVideoIndex < videos.length - 1) {
-      setCurrentVideoIndex((prev) => prev + 1)
+      setCurrentVideoIndex((prev) => prev + 1);
       
       // Scroll to the next video
-      const videoElements = document.querySelectorAll(".video-card")
+      const videoElements = document.querySelectorAll(".video-card");
       if (videoElements[currentVideoIndex + 1]) {
-        videoElements[currentVideoIndex + 1].scrollIntoView({ behavior: "smooth" })
+        videoElements[currentVideoIndex + 1].scrollIntoView({ 
+          behavior: "smooth",
+          block: "center" 
+        });
       }
     }
-  }
+  }, [currentVideoIndex, videos.length]);
 
   if (loading) {
     return (
@@ -150,18 +165,32 @@ export default function VideoFeed() {
           <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
       </div>
-    )
+    );
   }
 
   return (
     <div className="flex flex-col space-y-4 p-4">
       <div className="flex justify-between items-center">
-        <SearchBar onSearch={handleSearch} />
+        <SearchBar onSearch={handleSearch} isLoading={searchLoading} />
       </div>
       
       <VideoCategories activeCategory={activeCategory} onCategoryChange={handleCategoryChange} />
 
-      {videos.length === 0 ? (
+      {error && (
+        <div className="flex flex-col items-center justify-center py-6">
+          <p className="text-center text-red-500">{error}</p>
+          {searchQuery && (
+            <button
+              className="mt-4 text-primary hover:underline"
+              onClick={() => handleCategoryChange(activeCategory)}
+            >
+              Return to {activeCategory} videos
+            </button>
+          )}
+        </div>
+      )}
+
+      {videos.length === 0 && !error ? (
         <div className="flex flex-col items-center justify-center py-12">
           <p className="text-center text-gray-400">No videos found.</p>
           {searchQuery && (
@@ -214,5 +243,5 @@ export default function VideoFeed() {
         </div>
       )}
     </div>
-  )
+  );
 }
