@@ -523,6 +523,90 @@ export const fetchMoreVideos = async (
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const searchDebounceDelay = 300; // milliseconds
 
+// Add a function to fetch more search results for infinite scrolling
+export const fetchMoreSearchResults = async (
+  query: string,
+  count: number = 10
+): Promise<Video[]> => {
+  if (!query.trim()) return [];
+  
+  const cacheKey = `search_${query.toLowerCase()}`;
+  const currentCount = videoCache[cacheKey]?.length || 0;
+  
+  // If we don't have any cached results, return empty
+  if (!currentCount) return [];
+  
+  try {
+    // Make a search API call with pagination
+    const searchData = await fetchFromYouTubeAPI('search', {
+      part: 'snippet',
+      q: query,
+      maxResults: (count * 2).toString(), // Request extra to ensure we have enough after filtering
+      type: 'video',
+      videoEmbeddable: 'true',
+      safeSearch: 'moderate',
+      relevanceLanguage: 'en',
+      pageToken: nextPageTokens[cacheKey] || '',
+    });
+    
+    // Early exit if no results
+    if (!searchData.items || searchData.items.length === 0) {
+      return [];
+    }
+    
+    // Store next page token
+    nextPageTokens[cacheKey] = searchData.nextPageToken || null;
+    
+    // Extract video IDs for detailed info
+    const videoIds = searchData.items
+      .map((item: YouTubeVideoItem) => {
+        if (typeof item.id === 'object' && item.id?.videoId) {
+          return item.id.videoId;
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .join(",");
+    
+    if (!videoIds) {
+      return [];
+    }
+    
+    // Get detailed info for those videos including statistics
+    const videosData = await fetchFromYouTubeAPI('videos', {
+      part: 'snippet,statistics',
+      id: videoIds,
+    });
+    
+    let newVideos = videosData.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+    
+    // Filter out potential ads
+    newVideos = filterAdsAndPoorContent(newVideos);
+    
+    // Sort by relevance and view count
+    newVideos.sort((a: Video, b: Video) => {
+      const viewsA = parseInt(a.views.replace(/[^0-9]/g, '')) || 0;
+      const viewsB = parseInt(b.views.replace(/[^0-9]/g, '')) || 0;
+      return viewsB - viewsA;
+    });
+    
+    // Add to cache
+    if (!videoCache[cacheKey]) {
+      videoCache[cacheKey] = [];
+    }
+    
+    videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+    cacheTimestamps[cacheKey] = Date.now();
+    
+    // Return only the newly added videos
+    return newVideos;
+    
+  } catch (error) {
+    console.error("Error loading more search results:", error);
+    return [];
+  }
+};
+
 // Enhanced search function
 export const searchVideos = async (query: string, count: number = 15): Promise<Video[]> => {
   if (!query.trim()) return [];
@@ -539,12 +623,15 @@ export const searchVideos = async (query: string, count: number = 15): Promise<V
     const searchData = await fetchFromYouTubeAPI('search', {
       part: 'snippet',
       q: query,
-      maxResults: count.toString(), // Set to same count as category loading
+      maxResults: (count * 2).toString(), // Request extra to ensure we have enough after filtering
       type: 'video',
       videoEmbeddable: 'true', // Only videos that can be embedded
       safeSearch: 'moderate', // Filter out inappropriate content
       relevanceLanguage: 'en',
     });
+    
+    // Store next page token for infinite scrolling
+    nextPageTokens[cacheKey] = searchData.nextPageToken || null;
     
     // Early exit if no results
     if (!searchData.items || searchData.items.length === 0) {

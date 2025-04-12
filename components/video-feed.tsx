@@ -9,6 +9,7 @@ import {
   fetchVideosByCategory, 
   fetchMoreVideos, 
   debouncedSearchVideos,
+  fetchMoreSearchResults,
   preloadCommonCategories,
   type Video
 } from "@/lib/youtube-api"
@@ -109,6 +110,7 @@ export default function VideoFeed() {
     setSearchLoading(true);
     setError(null);
     setCurrentVideoIndex(0); // Reset current video index when searching
+    setHasMoreVideos(true); // Reset the hasMoreVideos state for new searches
     
     // Use the debounced search function to prevent excessive API calls
     debouncedSearchVideos(query, VIDEOS_PER_PAGE, (results) => {
@@ -116,6 +118,7 @@ export default function VideoFeed() {
       setSearchLoading(false);
       if (results.length === 0) {
         setError("No videos found matching your search.");
+        setHasMoreVideos(false);
       }
     });
   }, [activeCategory, handleCategoryChange]);
@@ -158,7 +161,7 @@ export default function VideoFeed() {
 
   // Set up infinite scroll with optimized loading
   useEffect(() => {
-    if (loading || loadingMore || !hasMoreVideos || searchQuery) return;
+    if (loading || loadingMore || !hasMoreVideos) return;
 
     if (observer.current) observer.current.disconnect();
 
@@ -166,8 +169,16 @@ export default function VideoFeed() {
       if (entries[0].isIntersecting) {
         setLoadingMore(true);
         try {
-          // Fetch more videos when user scrolls to the bottom
-          const newVideos = await fetchMoreVideos(activeCategory, LOAD_MORE_COUNT);
+          let newVideos: Video[] = [];
+          
+          // Use different fetch methods based on whether we're searching or browsing categories
+          if (searchQuery) {
+            // For search results
+            newVideos = await fetchMoreSearchResults(searchQuery, LOAD_MORE_COUNT);
+          } else {
+            // For category browsing
+            newVideos = await fetchMoreVideos(activeCategory, LOAD_MORE_COUNT);
+          }
           
           if (newVideos.length === 0) {
             setHasMoreVideos(false);
@@ -214,19 +225,36 @@ export default function VideoFeed() {
     } else if (videos.length > 0 && !loadingMore && hasMoreVideos) {
       // If at the last video, try to load more
       console.log("At last video, triggering load more");
-      fetchMoreVideos(activeCategory, LOAD_MORE_COUNT)
-        .then(newVideos => {
-          if (newVideos.length > 0) {
-            setVideos(prev => [...prev, ...newVideos]);
-          } else {
-            setHasMoreVideos(false);
-          }
-        })
-        .catch(err => {
-          console.error("Failed to load more videos after last video ended:", err);
-        });
+      
+      if (searchQuery) {
+        // Load more search results
+        fetchMoreSearchResults(searchQuery, LOAD_MORE_COUNT)
+          .then(newVideos => {
+            if (newVideos.length > 0) {
+              setVideos(prev => [...prev, ...newVideos]);
+            } else {
+              setHasMoreVideos(false);
+            }
+          })
+          .catch(err => {
+            console.error("Failed to load more search results after last video ended:", err);
+          });
+      } else {
+        // Load more category videos
+        fetchMoreVideos(activeCategory, LOAD_MORE_COUNT)
+          .then(newVideos => {
+            if (newVideos.length > 0) {
+              setVideos(prev => [...prev, ...newVideos]);
+            } else {
+              setHasMoreVideos(false);
+            }
+          })
+          .catch(err => {
+            console.error("Failed to load more videos after last video ended:", err);
+          });
+      }
     }
-  }, [currentVideoIndex, videos.length, loadingMore, hasMoreVideos, activeCategory]);
+  }, [currentVideoIndex, videos.length, loadingMore, hasMoreVideos, activeCategory, searchQuery]);
 
   if (loading) {
     return (
