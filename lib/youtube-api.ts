@@ -1,7 +1,61 @@
 // YouTube API integration for VidLook
 // Production implementation using YouTube Data API v3
 
-import { Video, YouTubeApiResponse, YouTubeVideoItem } from "@/types/video";
+// Define types directly here to fix import issues
+export interface Video {
+  id: string;
+  title: string;
+  channel: string;
+  views: string;
+  timestamp: string;
+}
+
+export interface YouTubeApiResponse {
+  kind: string;
+  etag: string;
+  nextPageToken?: string;
+  prevPageToken?: string;
+  pageInfo: {
+    totalResults: number;
+    resultsPerPage: number;
+  };
+  items: YouTubeVideoItem[];
+}
+
+export interface YouTubeVideoItem {
+  kind: string;
+  etag: string;
+  id: string | { kind: string; videoId: string; };
+  snippet?: {
+    publishedAt: string;
+    channelId: string;
+    title: string;
+    description: string;
+    thumbnails: {
+      default: { url: string; width: number; height: number };
+      medium: { url: string; width: number; height: number };
+      high: { url: string; width: number; height: number };
+      standard?: { url: string; width: number; height: number };
+      maxres?: { url: string; width: number; height: number };
+    };
+    channelTitle: string;
+    tags?: string[];
+    categoryId?: string;
+    liveBroadcastContent?: string;
+    defaultLanguage?: string;
+    localized?: {
+      title: string;
+      description: string;
+    };
+    defaultAudioLanguage?: string;
+  };
+  statistics?: {
+    viewCount: string;
+    likeCount: string;
+    favoriteCount: string;
+    commentCount: string;
+  };
+}
 
 // YouTube API configuration
 const YOUTUBE_API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;

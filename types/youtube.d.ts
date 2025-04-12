@@ -27,6 +27,8 @@ interface YT {
           playsinline?: 0 | 1
           rel?: 0 | 1
           showinfo?: 0 | 1
+          hl?: string  // Language setting
+          cc_load_policy?: 0 | 1  // Closed captions
         }
         events?: {
           onReady?: (event: { target: YT.Player }) => void

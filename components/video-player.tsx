@@ -12,8 +12,9 @@ interface VideoPlayerProps {
 // Declare YT as a global variable to satisfy TypeScript
 declare global {
   interface Window {
-    YT: any // Keep as any since we don't control this external type
     onYouTubeIframeAPIReady: (() => void) | null
+    // Use any for YT to avoid type conflicts with YouTube API
+    YT: any
     ytApiReady?: boolean // Optional flag to track API readiness
   }
 }

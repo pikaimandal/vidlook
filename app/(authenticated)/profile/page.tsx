@@ -12,7 +12,7 @@ interface UserData {
   username: string
   tokens: number
   isAuthenticated: boolean
-  preferences?: {
+  preferences: {
     darkMode: boolean
     notifications: boolean
     autoplay: boolean
@@ -52,13 +52,18 @@ export default function ProfilePage() {
   // Update user preferences in localStorage
   const updateUserPreferences = (preferences: { darkMode?: boolean; notifications?: boolean; autoplay?: boolean }) => {
     if (userData) {
+      // Ensure all properties are defined with defaults
+      const updatedPreferences = {
+        darkMode: userData.preferences.darkMode,
+        notifications: userData.preferences.notifications,
+        autoplay: userData.preferences.autoplay,
+        ...preferences,
+      };
+      
       const updatedUser = {
         ...userData,
-        preferences: {
-          ...userData.preferences,
-          ...preferences,
-        },
-      }
+        preferences: updatedPreferences,
+      };
 
       localStorage.setItem("user", JSON.stringify(updatedUser))
       setUserData(updatedUser)

@@ -9,9 +9,9 @@ import {
   fetchVideosByCategory, 
   fetchMoreVideos, 
   debouncedSearchVideos,
-  preloadCommonCategories
+  preloadCommonCategories,
+  type Video
 } from "@/lib/youtube-api"
-import { Video } from "@/types/video"
 
 // We'll keep a smaller set of hardcoded videos as backup in case the API fails
 const FALLBACK_VIDEOS = {
