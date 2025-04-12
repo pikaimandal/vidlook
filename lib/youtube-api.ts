@@ -63,7 +63,10 @@ const YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3";
 
 // Check if API key is available
 if (!YOUTUBE_API_KEY) {
-  console.warn("YouTube API key is not set. Please add NEXT_PUBLIC_YOUTUBE_API_KEY to your .env.local file.");
+  console.error(
+    "YouTube API key is missing. Add NEXT_PUBLIC_YOUTUBE_API_KEY to your .env.local file. " +
+    "The app will attempt to connect to YouTube but may fail due to API limits."
+  );
 }
 
 // Cache mechanism to avoid repeated API calls
@@ -152,7 +155,7 @@ const isCacheExpired = (cacheKey: string): boolean => {
 };
 
 // Enhanced fetch function with optimized parameters and ad filtering
-const fetchFromYouTubeAPI = async (endpoint: string, params: Record<string, string>): Promise<YouTubeApiResponse> => {
+const fetchFromYouTubeAPI = async (endpoint: string, params: Record<string, string>, retries = 2): Promise<YouTubeApiResponse> => {
   // Add API key to params
   const queryParams = new URLSearchParams({
     ...params,
@@ -171,6 +174,17 @@ const fetchFromYouTubeAPI = async (endpoint: string, params: Record<string, stri
     clearTimeout(timeoutId);
     
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`YouTube API error (${response.status}): ${errorText}`);
+      
+      if (retries > 0 && (response.status === 403 || response.status === 429)) {
+        // If rate limited, wait and retry with exponential backoff
+        const delay = 1000 * (3 - retries); // 1s, 2s delay based on retry count
+        console.warn(`Rate limited by YouTube API, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchFromYouTubeAPI(endpoint, params, retries - 1);
+      }
+      
       throw new Error(`YouTube API error: ${response.statusText}`);
     }
     
@@ -179,7 +193,14 @@ const fetchFromYouTubeAPI = async (endpoint: string, params: Record<string, stri
   } catch (error) {
     clearTimeout(timeoutId);
     if ((error as Error).name === 'AbortError') {
-      throw new Error('Request timed out');
+      console.error('YouTube API request timed out');
+      
+      if (retries > 0) {
+        console.warn(`Retrying after timeout (${retries} attempts left)...`);
+        return fetchFromYouTubeAPI(endpoint, params, retries - 1);
+      }
+      
+      throw new Error('Request timed out after multiple attempts');
     }
     throw error;
   }
@@ -214,7 +235,7 @@ export const fetchVideosByCategory = async (
 ): Promise<Video[]> => {
   const cacheKey = `category_${category}`;
   
-  // Clear the cache if requested, if we're starting a new category, or if cache expired
+  // Force bypassing cache if requested to ensure fresh videos
   if (resetCache || isCacheExpired(cacheKey)) {
     videoCache[cacheKey] = [];
     nextPageTokens[cacheKey] = null;
@@ -228,91 +249,176 @@ export const fetchVideosByCategory = async (
   try {
     let newVideos: Video[] = [];
     
-    // For 'All' category, specifically mix videos from multiple categories to ensure we get results
-    if (category === "All") {
-      try {
-        // Try to get popular videos first
-        const data = await fetchFromYouTubeAPI('videos', {
-          part: 'snippet,statistics',
-          chart: 'mostPopular',
-          maxResults: count.toString(),
-          regionCode: 'US'
-        });
-        
-        if (data.items && data.items.length > 0) {
-          newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
-          nextPageTokens[cacheKey] = data.nextPageToken || null;
-        } else {
-          // Fallback to hardcoded videos if API returns no results
-          newVideos = [
-            {
-              id: "dQw4w9WgXcQ",
-              title: "Rick Astley - Never Gonna Give You Up (Official Music Video)",
-              channel: "Rick Astley",
-              views: "1.2B views",
-              timestamp: "14 years ago",
-            }
-          ];
+    // Attempt to get real videos for any category
+    const fetchRealVideos = async () => {
+      // For 'All' category, mix videos from multiple categories
+      if (category === "All") {
+        try {
+          // Get popular videos
+          const data = await fetchFromYouTubeAPI('videos', {
+            part: 'snippet,statistics',
+            chart: 'mostPopular',
+            maxResults: (count * 2).toString(), // Request extra to ensure we have enough after filtering
+            regionCode: 'US'
+          });
+          
+          if (data.items && data.items.length > 0) {
+            newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+            nextPageTokens[cacheKey] = data.nextPageToken || null;
+            return true;
+          }
+          return false;
+        } catch (error) {
+          console.error("Error fetching 'All' videos:", error);
+          return false;
         }
-      } catch (error) {
-        console.error("Error fetching 'All' videos, trying trending instead:", error);
-        // Try trending as fallback
+      } 
+      else if (category === "Trending") {
+        try {
+          const data = await fetchFromYouTubeAPI('videos', {
+            part: 'snippet,statistics',
+            chart: 'mostPopular',
+            maxResults: (count * 2).toString(),
+            regionCode: 'US'
+          });
+          
+          if (data.items && data.items.length > 0) {
+            newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+            nextPageTokens[cacheKey] = data.nextPageToken || null;
+            return true;
+          }
+          return false;
+        } catch (error) {
+          console.error("Error fetching Trending videos:", error);
+          return false;
+        }
+      } 
+      else {
+        try {
+          // For specific categories, use videoCategoryId
+          const categoryId = YOUTUBE_CATEGORIES[category as keyof typeof YOUTUBE_CATEGORIES];
+          if (categoryId) {
+            const data = await fetchFromYouTubeAPI('videos', {
+              part: 'snippet,statistics',
+              chart: 'mostPopular',
+              videoCategoryId: categoryId,
+              maxResults: (count * 2).toString(),
+              pageToken: nextPageTokens[cacheKey] || '',
+              regionCode: 'US'
+            });
+            
+            if (data.items && data.items.length > 0) {
+              newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+              nextPageTokens[cacheKey] = data.nextPageToken || null;
+              return true;
+            }
+          }
+          return false;
+        } catch (error) {
+          console.error(`Error fetching ${category} videos:`, error);
+          return false;
+        }
+      }
+    };
+    
+    // Make first attempt to get real videos
+    let gotRealVideos = await fetchRealVideos();
+    
+    // If we couldn't get category-specific videos, try trending as backup
+    if (!gotRealVideos) {
+      try {
+        console.warn(`Couldn't get videos for ${category}, trying trending videos instead`);
         const trendingData = await fetchFromYouTubeAPI('videos', {
           part: 'snippet,statistics',
           chart: 'mostPopular',
-          maxResults: count.toString(),
+          maxResults: (count * 2).toString(),
           regionCode: 'US'
         });
         
         if (trendingData.items && trendingData.items.length > 0) {
           newVideos = trendingData.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+          gotRealVideos = true;
         }
+      } catch (error) {
+        console.error("Error fetching backup trending videos:", error);
       }
-    } else if (category === "Trending") {
-      const data = await fetchFromYouTubeAPI('videos', {
-        part: 'snippet,statistics',
-        chart: 'mostPopular',
-        maxResults: count.toString(),
-        regionCode: 'US'
-      });
-      
-      if (data.items && data.items.length > 0) {
-        newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
-        nextPageTokens[cacheKey] = data.nextPageToken || null;
-      }
-    } else {
-      // For specific categories, use the videoCategoryId
-      const categoryId = YOUTUBE_CATEGORIES[category as keyof typeof YOUTUBE_CATEGORIES];
-      if (categoryId) {
-        const data = await fetchFromYouTubeAPI('videos', {
-          part: 'snippet,statistics',
-          chart: 'mostPopular',
-          videoCategoryId: categoryId,
-          maxResults: count.toString(),
-          pageToken: nextPageTokens[cacheKey] || '',
-          regionCode: 'US'
+    }
+    
+    // If we still don't have videos, try a direct search for popular videos
+    if (!gotRealVideos) {
+      try {
+        console.warn("Trying search API as last resort");
+        const searchQuery = category === "All" || category === "Trending" 
+          ? "popular videos" 
+          : `popular ${category} videos`;
+          
+        const searchData = await fetchFromYouTubeAPI('search', {
+          part: 'snippet',
+          q: searchQuery,
+          maxResults: (count * 2).toString(),
+          type: 'video',
+          videoEmbeddable: 'true'
         });
         
-        if (data.items && data.items.length > 0) {
-          newVideos = data.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
-          nextPageTokens[cacheKey] = data.nextPageToken || null;
+        if (searchData.items && searchData.items.length > 0) {
+          // We need to get full video details to get view counts
+          const videoIds = searchData.items
+            .map((item: YouTubeVideoItem) => {
+              if (typeof item.id === 'object' && item.id?.videoId) {
+                return item.id.videoId;
+              }
+              return null;
+            })
+            .filter(Boolean)
+            .join(",");
+            
+          if (videoIds) {
+            const videoData = await fetchFromYouTubeAPI('videos', {
+              part: 'snippet,statistics',
+              id: videoIds
+            });
+            
+            if (videoData.items && videoData.items.length > 0) {
+              newVideos = videoData.items.map((item: YouTubeVideoItem) => formatVideoItem(item));
+              gotRealVideos = true;
+            }
+          }
         }
+      } catch (error) {
+        console.error("Error with search API fallback:", error);
       }
     }
     
     // Filter out potential ads
-    newVideos = filterAdsAndPoorContent(newVideos);
+    if (newVideos.length > 0) {
+      newVideos = filterAdsAndPoorContent(newVideos);
+    }
     
-    // If still no videos, provide fallback
+    // Only use hardcoded fallback as absolute last resort
     if (newVideos.length === 0) {
-      console.warn(`No videos found for category: ${category}, using fallback`);
+      console.error(`CRITICAL: Could not load any videos from YouTube API for ${category}. Using emergency fallbacks.`);
+      // Use a more diverse set of hardcoded fallbacks
       newVideos = [
         {
-          id: "dQw4w9WgXcQ",
+          id: "dQw4w9WgXcQ", // Rick Astley - Never Gonna Give You Up
           title: "Rick Astley - Never Gonna Give You Up (Official Music Video)",
           channel: "Rick Astley",
           views: "1.2B views",
           timestamp: "14 years ago",
+        },
+        {
+          id: "9bZkp7q19f0", // PSY - Gangnam Style
+          title: "PSY - GANGNAM STYLE(강남스타일) M/V",
+          channel: "officialpsy",
+          views: "4.6B views",
+          timestamp: "11 years ago",
+        },
+        {
+          id: "JGwWNGJdvx8", // Ed Sheeran - Shape of You
+          title: "Ed Sheeran - Shape of You (Official Music Video)",
+          channel: "Ed Sheeran",
+          views: "5.9B views",
+          timestamp: "6 years ago",
         }
       ];
     }
@@ -326,11 +432,16 @@ export const fetchVideosByCategory = async (
     videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
     cacheTimestamps[cacheKey] = Date.now();
     
+    // Log success if we got real videos
+    if (gotRealVideos) {
+      console.log(`Successfully loaded ${newVideos.length} real videos for category: ${category}`);
+    }
+    
     return videoCache[cacheKey].slice(0, count);
     
   } catch (error) {
-    console.error("Error fetching videos:", error);
-    // Return fallback videos for any category in case of error
+    console.error("Critical error fetching videos:", error);
+    // Return minimal fallback only as a last resort
     return [
       {
         id: "dQw4w9WgXcQ",

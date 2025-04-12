@@ -47,8 +47,9 @@ export default function VideoFeed() {
   const [hasMoreVideos, setHasMoreVideos] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
 
-  // Handle category change - fetch videos from API
+  // Handle category change - fetch videos from API with more aggressive retry
   const handleCategoryChange = useCallback(async (category: VideoCategory) => {
     setActiveCategory(category)
     setLoading(true)
@@ -58,19 +59,37 @@ export default function VideoFeed() {
     setSearchQuery("") // Clear search when changing category
     
     // Reset shown videos to improve loading behavior
-    try {
-      const newVideos = await fetchVideosByCategory(category, 10, true);
-      if (newVideos.length > 0) {
-        setVideos(newVideos);
-      } else {
-        setError("No videos found in this category. Please try another.");
+    const fetchVideos = async (attempt = 0): Promise<void> => {
+      try {
+        console.log(`Fetching videos for category ${category}, attempt ${attempt + 1}`)
+        const newVideos = await fetchVideosByCategory(category, 15, true); // Fetch more videos initially
+        
+        if (newVideos.length > 0) {
+          setVideos(newVideos);
+          setError(null);
+        } else if (attempt < 2) { // Try up to 3 times
+          console.warn(`No videos found on attempt ${attempt + 1}, retrying...`);
+          await new Promise(r => setTimeout(r, 1000)); // Wait a second before retry
+          await fetchVideos(attempt + 1);
+        } else {
+          setError("No videos found in this category. Please try another or reload the page.");
+        }
+      } catch (error) {
+        console.error("Error fetching videos:", error);
+        
+        if (attempt < 2) { // Try up to 3 times
+          console.warn(`Error on attempt ${attempt + 1}, retrying...`);
+          await new Promise(r => setTimeout(r, 1000)); // Wait a second before retry
+          await fetchVideos(attempt + 1);
+        } else {
+          setError("Failed to load videos. Please check your internet connection and try again.");
+        }
+      } finally {
+        setLoading(false);
       }
-    } catch (error) {
-      console.error("Error fetching videos:", error);
-      setError("Failed to load videos. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+    };
+    
+    await fetchVideos();
   }, []);
 
   // Handle search with optimized function
@@ -103,6 +122,27 @@ export default function VideoFeed() {
     setSearchQuery("");
     handleCategoryChange(category);
   }, [handleCategoryChange]);
+
+  // Add function to handle manual refresh on error
+  const handleRefresh = useCallback(async () => {
+    setRetryCount(prev => prev + 1);
+    setError(null);
+    setLoading(true);
+    
+    try {
+      const newVideos = await fetchVideosByCategory(activeCategory, 15, true);
+      if (newVideos.length > 0) {
+        setVideos(newVideos);
+      } else {
+        setError("Still unable to load videos. Please try again later.");
+      }
+    } catch (error) {
+      console.error("Error during manual refresh:", error);
+      setError("Failed to refresh videos. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCategory]);
 
   // Initialize videos and preload common categories for better UX
   useEffect(() => {
@@ -151,22 +191,38 @@ export default function VideoFeed() {
     };
   }, [videos, loading, activeCategory, searchQuery, loadingMore, hasMoreVideos]);
 
-  // Handle video end - go to next video
+  // Handle video end - go to next video with improved logic
   const handleVideoEnd = useCallback(() => {
     // Only auto advance if not the last video
     if (currentVideoIndex < videos.length - 1) {
-      setCurrentVideoIndex((prev) => prev + 1);
+      setCurrentVideoIndex(prev => prev + 1);
       
-      // Scroll to the next video
-      const videoElements = document.querySelectorAll(".video-card");
-      if (videoElements[currentVideoIndex + 1]) {
-        videoElements[currentVideoIndex + 1].scrollIntoView({ 
-          behavior: "smooth",
-          block: "center" 
+      // Scroll to the next video with a small delay to ensure DOM is updated
+      setTimeout(() => {
+        const videoElements = document.querySelectorAll(".video-card");
+        if (videoElements[currentVideoIndex + 1]) {
+          videoElements[currentVideoIndex + 1].scrollIntoView({ 
+            behavior: "smooth",
+            block: "center" 
+          });
+        }
+      }, 100);
+    } else if (videos.length > 0 && !loadingMore && hasMoreVideos) {
+      // If at the last video, try to load more
+      console.log("At last video, triggering load more");
+      fetchMoreVideos(activeCategory, 5)
+        .then(newVideos => {
+          if (newVideos.length > 0) {
+            setVideos(prev => [...prev, ...newVideos]);
+          } else {
+            setHasMoreVideos(false);
+          }
+        })
+        .catch(err => {
+          console.error("Failed to load more videos after last video ended:", err);
         });
-      }
     }
-  }, [currentVideoIndex, videos.length]);
+  }, [currentVideoIndex, videos.length, loadingMore, hasMoreVideos, activeCategory]);
 
   if (loading) {
     return (
@@ -208,6 +264,12 @@ export default function VideoFeed() {
               Return to {activeCategory} videos
             </button>
           )}
+          <button
+            className="mt-4 bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90"
+            onClick={handleRefresh}
+          >
+            Try Again
+          </button>
         </div>
       )}
 
@@ -222,15 +284,22 @@ export default function VideoFeed() {
               Return to {activeCategory} videos
             </button>
           )}
+          <button
+            className="mt-4 bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90"
+            onClick={handleRefresh}
+          >
+            Reload Videos
+          </button>
         </div>
       ) : (
         <div className="space-y-6">
           {videos.map((video, index) => (
             <Card
-              key={`${video.id}-${index}`}
+              key={`${video.id}-${index}-${retryCount}`}
               className={`video-card bg-secondary/30 border-none overflow-hidden ${
                 currentVideoIndex === index ? "ring-2 ring-primary" : ""
               }`}
+              onClick={() => setCurrentVideoIndex(index)}
             >
               <CardContent className="p-0">
                 <div className="aspect-video relative">

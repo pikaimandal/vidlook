@@ -62,19 +62,17 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
   const containerRef = useRef<HTMLDivElement>(null)
   const tokenTimerRef = useRef<NodeJS.Timeout | null>(null)
   const lastTokenTimeRef = useRef<number>(0)
+  const videoIdRef = useRef<string>(videoId) // Add a ref to track videoId changes
 
   // Initialize player when component mounts or videoId changes
   useEffect(() => {
     let isMounted = true;
+    videoIdRef.current = videoId; // Update the ref
     setPlayerError(false);
     setIsLoading(true);
     
-    // Initialize on demand based on visibility
-    // We'll initialize the player for active videos immediately, and others when they become active
-    if (!isActive && !playerRef.current) {
-      setIsLoading(false); // For non-active videos, don't show loading spinner initially
-      return;
-    }
+    // Always initialize all videos to ensure they're ready to play
+    // This fixes the issue where videos below the first one weren't loading
     
     const initPlayer = async () => {
       if (!videoRef.current || !isMounted) return;
@@ -93,13 +91,17 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
           return;
         }
         
-        // Set a valid default video ID if the current one is invalid
-        // YouTube video IDs are typically 11 characters long
-        const validVideoId = videoId && videoId.length >= 11 ? videoId : "dQw4w9WgXcQ";
-      
+        // Ensure we have a valid video ID
+        if (!videoId || videoId.length < 11) {
+          console.error("Invalid video ID:", videoId);
+          setPlayerError(true);
+          setIsLoading(false);
+          return;
+        }
+        
         // Create a div element for the player
         const playerElement = document.createElement("div");
-        playerElement.id = `youtube-player-${validVideoId}`;
+        playerElement.id = `youtube-player-${videoId}`;
         videoRef.current.innerHTML = "";
         videoRef.current.appendChild(playerElement);
         
@@ -107,7 +109,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         playerRef.current = new window.YT.Player(playerElement.id, {
           height: "100%",
           width: "100%",
-          videoId: validVideoId,
+          videoId: videoId,
           playerVars: {
             autoplay: 0,
             controls: 0,
@@ -137,10 +139,10 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
       }
     };
     
-    // Start initialization with a small delay for better performance
+    // Initialize immediately for all videos with a small stagger
     const initTimeout = setTimeout(() => {
       initPlayer();
-    }, isActive ? 0 : 300); // No delay for active video, small delay for others
+    }, 100); // Small delay to prevent overwhelming the browser
     
     return () => {
       isMounted = false;
@@ -150,7 +152,15 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         clearInterval(tokenTimerRef.current);
       }
     };
-  }, [videoId, isActive]);
+  }, [videoId]);
+
+  // Add a separate effect to handle when isActive changes
+  useEffect(() => {
+    if (isActive && playerRef.current && playerReady) {
+      // If this is now the active video and player is ready
+      playerRef.current.cueVideoById(videoId);
+    }
+  }, [isActive, playerReady, videoId]);
 
   const onPlayerReady = (event: any) => {
     setPlayerReady(true);
