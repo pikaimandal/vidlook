@@ -56,10 +56,15 @@ export default function VideoFeed() {
     setHasMoreVideos(true)
     setError(null)
     setSearchQuery("") // Clear search when changing category
-
+    
+    // Reset shown videos to improve loading behavior
     try {
       const newVideos = await fetchVideosByCategory(category, 10, true);
-      setVideos(newVideos);
+      if (newVideos.length > 0) {
+        setVideos(newVideos);
+      } else {
+        setError("No videos found in this category. Please try another.");
+      }
     } catch (error) {
       console.error("Error fetching videos:", error);
       setError("Failed to load videos. Please try again.");
@@ -73,12 +78,14 @@ export default function VideoFeed() {
     setSearchQuery(query);
     
     if (!query.trim()) {
+      // Clear search and go back to current category
       handleCategoryChange(activeCategory);
       return;
     }
     
     setSearchLoading(true);
     setError(null);
+    setCurrentVideoIndex(0); // Reset current video index when searching
     
     // Use the debounced search function to prevent excessive API calls
     debouncedSearchVideos(query, (results) => {
@@ -89,6 +96,13 @@ export default function VideoFeed() {
       }
     });
   }, [activeCategory, handleCategoryChange]);
+
+  // Add this new function to sync search state with VideoCategories
+  const handleCategoryClick = useCallback((category: VideoCategory) => {
+    // Always clear search state when changing categories
+    setSearchQuery("");
+    handleCategoryChange(category);
+  }, [handleCategoryChange]);
 
   // Initialize videos and preload common categories for better UX
   useEffect(() => {
@@ -158,9 +172,12 @@ export default function VideoFeed() {
     return (
       <div className="flex flex-col space-y-4 p-4">
         <div className="flex justify-between items-center">
-          <SearchBar onSearch={handleSearch} />
+          <SearchBar 
+            onSearch={handleSearch} 
+            searchQuery={searchQuery}
+          />
         </div>
-        <VideoCategories activeCategory={activeCategory} onCategoryChange={handleCategoryChange} />
+        <VideoCategories activeCategory={activeCategory} onCategoryChange={handleCategoryClick} />
         <div className="flex justify-center my-12">
           <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
@@ -171,10 +188,14 @@ export default function VideoFeed() {
   return (
     <div className="flex flex-col space-y-4 p-4">
       <div className="flex justify-between items-center">
-        <SearchBar onSearch={handleSearch} isLoading={searchLoading} />
+        <SearchBar 
+          onSearch={handleSearch} 
+          isLoading={searchLoading}
+          searchQuery={searchQuery}
+        />
       </div>
       
-      <VideoCategories activeCategory={activeCategory} onCategoryChange={handleCategoryChange} />
+      <VideoCategories activeCategory={activeCategory} onCategoryChange={handleCategoryClick} />
 
       {error && (
         <div className="flex flex-col items-center justify-center py-6">
@@ -182,7 +203,7 @@ export default function VideoFeed() {
           {searchQuery && (
             <button
               className="mt-4 text-primary hover:underline"
-              onClick={() => handleCategoryChange(activeCategory)}
+              onClick={() => handleCategoryClick(activeCategory)}
             >
               Return to {activeCategory} videos
             </button>
@@ -196,7 +217,7 @@ export default function VideoFeed() {
           {searchQuery && (
             <button
               className="mt-4 text-primary hover:underline"
-              onClick={() => handleCategoryChange(activeCategory)}
+              onClick={() => handleCategoryClick(activeCategory)}
             >
               Return to {activeCategory} videos
             </button>

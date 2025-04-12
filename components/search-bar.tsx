@@ -9,17 +9,23 @@ import { Input } from "@/components/ui/input"
 interface SearchBarProps {
   onSearch: (query: string) => void
   isLoading?: boolean
+  searchQuery?: string // Add prop to sync with parent component
 }
 
-export default function SearchBar({ onSearch, isLoading = false }: SearchBarProps) {
-  const [searchQuery, setSearchQuery] = useState("")
+export default function SearchBar({ onSearch, isLoading = false, searchQuery = "" }: SearchBarProps) {
+  const [inputValue, setInputValue] = useState(searchQuery)
   const [isFocused, setIsFocused] = useState(false)
+  
+  // Sync with external searchQuery prop
+  useEffect(() => {
+    setInputValue(searchQuery);
+  }, [searchQuery]);
 
   // Clear search when pressing Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && searchQuery) {
-        setSearchQuery('');
+      if (e.key === 'Escape' && inputValue) {
+        setInputValue('');
         onSearch('');
       }
     };
@@ -28,17 +34,17 @@ export default function SearchBar({ onSearch, isLoading = false }: SearchBarProp
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [searchQuery, onSearch]);
+  }, [inputValue, onSearch]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (searchQuery.trim()) {
-      onSearch(searchQuery.trim())
+    if (inputValue.trim()) {
+      onSearch(inputValue.trim())
     }
   }
 
   const handleClear = () => {
-    setSearchQuery('');
+    setInputValue('');
     onSearch('');
   }
 
@@ -47,8 +53,8 @@ export default function SearchBar({ onSearch, isLoading = false }: SearchBarProp
       <Input
         type="text"
         placeholder="Search videos..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
         className={`pl-10 pr-10 bg-secondary/50 border-none ${isFocused ? 'ring-1 ring-primary' : ''} focus-visible:ring-primary`}
@@ -63,7 +69,7 @@ export default function SearchBar({ onSearch, isLoading = false }: SearchBarProp
         )}
       </div>
       
-      {searchQuery && !isLoading && (
+      {inputValue && !isLoading && (
         <button
           type="button"
           onClick={handleClear}

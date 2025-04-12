@@ -68,8 +68,10 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
     setPlayerError(false);
     setIsLoading(true);
     
-    // Only initialize if active to save resources
+    // Initialize on demand based on visibility
+    // We'll initialize the player for active videos immediately, and others when they become active
     if (!isActive && !playerRef.current) {
+      setIsLoading(false); // For non-active videos, don't show loading spinner initially
       return;
     }
     
@@ -82,6 +84,14 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
           await initializeYouTubeAPI();
         }
         
+        // Check if we already have a player initialized with this ID
+        if (playerRef.current && playerRef.current.getVideoData && playerRef.current.getVideoData().video_id === videoId) {
+          // Player already initialized with this video, just set ready
+          setPlayerReady(true);
+          setIsLoading(false);
+          return;
+        }
+        
         // Set a valid default video ID if the current one is invalid
         // YouTube video IDs are typically 11 characters long
         const validVideoId = videoId && videoId.length >= 11 ? videoId : "dQw4w9WgXcQ";
@@ -92,7 +102,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         videoRef.current.innerHTML = "";
         videoRef.current.appendChild(playerElement);
         
-        // Create player with optimized options
+        // Create player with optimized options for faster loading
         playerRef.current = new window.YT.Player(playerElement.id, {
           height: "100%",
           width: "100%",
@@ -108,7 +118,6 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
             rel: 0, // Don't show related videos
             showinfo: 0,
             playsinline: 1,
-            // Additional parameters that improve performance and user experience
             hl: 'en', // Set language to English
             cc_load_policy: 0, // Hide closed captions by default
           },
@@ -127,10 +136,14 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
       }
     };
     
-    initPlayer();
+    // Start initialization with a small delay for better performance
+    const initTimeout = setTimeout(() => {
+      initPlayer();
+    }, isActive ? 0 : 300); // No delay for active video, small delay for others
     
     return () => {
       isMounted = false;
+      clearTimeout(initTimeout);
       // Clean up
       if (tokenTimerRef.current) {
         clearInterval(tokenTimerRef.current);
@@ -310,7 +323,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         ) : (
           <>
             <div ref={videoRef} className="w-full h-full"></div>
-            {isLoading && (
+            {isActive && isLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
                 <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
               </div>
