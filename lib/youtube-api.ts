@@ -524,14 +524,14 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const searchDebounceDelay = 300; // milliseconds
 
 // Enhanced search function
-export const searchVideos = async (query: string, count: number = 20): Promise<Video[]> => {
+export const searchVideos = async (query: string, count: number = 15): Promise<Video[]> => {
   if (!query.trim()) return [];
   
   const cacheKey = `search_${query.toLowerCase()}`;
   
   // If we have cached results for this search and they're not expired, return them
   if (videoCache[cacheKey] && !isCacheExpired(cacheKey)) {
-    return videoCache[cacheKey];
+    return videoCache[cacheKey].slice(0, count);
   }
   
   try {
@@ -539,7 +539,7 @@ export const searchVideos = async (query: string, count: number = 20): Promise<V
     const searchData = await fetchFromYouTubeAPI('search', {
       part: 'snippet',
       q: query,
-      maxResults: count.toString(), // Get reasonable number of results
+      maxResults: count.toString(), // Set to same count as category loading
       type: 'video',
       videoEmbeddable: 'true', // Only videos that can be embedded
       safeSearch: 'moderate', // Filter out inappropriate content
@@ -592,7 +592,7 @@ export const searchVideos = async (query: string, count: number = 20): Promise<V
     videoCache[cacheKey] = videos;
     cacheTimestamps[cacheKey] = Date.now();
     
-    return videos;
+    return videos.slice(0, count);
     
   } catch (error) {
     console.error("Error searching videos:", error);
@@ -602,7 +602,8 @@ export const searchVideos = async (query: string, count: number = 20): Promise<V
 
 // Debounced search function to prevent excessive API calls
 export const debouncedSearchVideos = (
-  query: string, 
+  query: string,
+  count: number = 15,
   callback: (videos: Video[]) => void
 ): void => {
   // Clear previous timer
@@ -612,7 +613,7 @@ export const debouncedSearchVideos = (
   
   // Set new timer
   searchDebounceTimer = setTimeout(async () => {
-    const results = await searchVideos(query);
+    const results = await searchVideos(query, count);
     callback(results);
   }, searchDebounceDelay);
 }; 

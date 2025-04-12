@@ -35,6 +35,10 @@ const FALLBACK_VIDEOS = {
   ],
 };
 
+// Define a constant for video count to keep it consistent
+const VIDEOS_PER_PAGE = 12;
+const LOAD_MORE_COUNT = 6;
+
 export default function VideoFeed() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
@@ -62,7 +66,7 @@ export default function VideoFeed() {
     const fetchVideos = async (attempt = 0): Promise<void> => {
       try {
         console.log(`Fetching videos for category ${category}, attempt ${attempt + 1}`)
-        const newVideos = await fetchVideosByCategory(category, 15, true); // Fetch more videos initially
+        const newVideos = await fetchVideosByCategory(category, VIDEOS_PER_PAGE, true);
         
         if (newVideos.length > 0) {
           setVideos(newVideos);
@@ -107,7 +111,7 @@ export default function VideoFeed() {
     setCurrentVideoIndex(0); // Reset current video index when searching
     
     // Use the debounced search function to prevent excessive API calls
-    debouncedSearchVideos(query, (results) => {
+    debouncedSearchVideos(query, VIDEOS_PER_PAGE, (results) => {
       setVideos(results);
       setSearchLoading(false);
       if (results.length === 0) {
@@ -130,7 +134,7 @@ export default function VideoFeed() {
     setLoading(true);
     
     try {
-      const newVideos = await fetchVideosByCategory(activeCategory, 15, true);
+      const newVideos = await fetchVideosByCategory(activeCategory, VIDEOS_PER_PAGE, true);
       if (newVideos.length > 0) {
         setVideos(newVideos);
       } else {
@@ -163,7 +167,7 @@ export default function VideoFeed() {
         setLoadingMore(true);
         try {
           // Fetch more videos when user scrolls to the bottom
-          const newVideos = await fetchMoreVideos(activeCategory, 5);
+          const newVideos = await fetchMoreVideos(activeCategory, LOAD_MORE_COUNT);
           
           if (newVideos.length === 0) {
             setHasMoreVideos(false);
@@ -210,7 +214,7 @@ export default function VideoFeed() {
     } else if (videos.length > 0 && !loadingMore && hasMoreVideos) {
       // If at the last video, try to load more
       console.log("At last video, triggering load more");
-      fetchMoreVideos(activeCategory, 5)
+      fetchMoreVideos(activeCategory, LOAD_MORE_COUNT)
         .then(newVideos => {
           if (newVideos.length > 0) {
             setVideos(prev => [...prev, ...newVideos]);
