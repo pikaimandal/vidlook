@@ -15,14 +15,14 @@ export interface Video {
 // List of Invidious instances to use with fallback support
 // Source: https://api.invidious.io/instances.json (filtered for stable instances)
 const INVIDIOUS_INSTANCES = [
-  'https://invidious.slipfox.xyz',
-  'https://invidious.privacydev.net',
-  'https://yt.artemislena.eu',
-  'https://invidious.protokolla.fi',
-  'https://invidious.dhusch.de',
-  'https://vid.priv.au',
-  'https://iv.melmac.space',
-  'https://iv.ggtyler.dev'
+  'https://invidious.fdn.fr',  // Fast, reliable French instance
+  'https://inv.riverside.rocks', // US-based reliable instance
+  'https://invidious.lunar.icu', // Reliable new instance
+  'https://invidious.nerdvpn.de', // German instance
+  'https://invidious.protokolla.fi', // Finnish instance
+  'https://invidious.private.coffee', // US-based instance
+  'https://iv.ggtyler.dev',     // US-based instance
+  'https://yt.drgnz.club'       // Singapore-based instance
 ];
 
 // Cache mechanism to avoid repeated API calls
@@ -342,11 +342,128 @@ export const debouncedSearchVideos = (
 
 // Function to get video details by ID
 export const getVideoDetails = async (videoId: string): Promise<any> => {
-  try {
-    const data = await fetchFromInvidiousAPI(`videos/${videoId}`, {});
-    return data;
-  } catch (error) {
-    console.error(`Error fetching video details for ${videoId}:`, error);
-    throw error;
+  // Try each instance directly until one works
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      console.log(`Trying to fetch video ${videoId} from ${instance}`);
+      
+      // Direct fetch to bypass our custom fetch function for debugging
+      const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        console.warn(`Failed to fetch from ${instance} with status: ${response.status}`);
+        continue; // Try next instance
+      }
+      
+      const data = await response.json();
+      
+      // Verify we have necessary data
+      if (!data || (!data.formatStreams && !data.adaptiveFormats)) {
+        console.warn(`No video formats found in response from ${instance}`);
+        continue; // Try next instance
+      }
+      
+      // Make sure we have video formats we can use
+      const hasPlayableFormats = (
+        (data.formatStreams && data.formatStreams.length > 0) || 
+        (data.adaptiveFormats && data.adaptiveFormats.length > 0)
+      );
+      
+      if (!hasPlayableFormats) {
+        console.warn(`No playable formats found from ${instance}`);
+        continue; // Try next instance
+      }
+      
+      // Fix potential issues with the video URLs
+      if (data.formatStreams) {
+        data.formatStreams = data.formatStreams.map((format: any) => {
+          // Ensure URL is valid and has proper protocol
+          if (format.url && !format.url.startsWith('http')) {
+            format.url = `https:${format.url}`;
+          }
+          return format;
+        });
+      }
+      
+      if (data.adaptiveFormats) {
+        data.adaptiveFormats = data.adaptiveFormats.map((format: any) => {
+          // Ensure URL is valid and has proper protocol
+          if (format.url && !format.url.startsWith('http')) {
+            format.url = `https:${format.url}`;
+          }
+          return format;
+        });
+      }
+      
+      console.log(`Successfully loaded video data from ${instance}`);
+      return data;
+    } catch (error) {
+      console.error(`Error fetching video details from ${instance} for ${videoId}:`, error);
+      // Continue to the next instance
+    }
   }
+  
+  // If all Invidious instances fail, try Piped as a last resort
+  try {
+    console.log('All Invidious instances failed, trying Piped API as fallback');
+    
+    // Piped instances are another YouTube frontend that might work when Invidious doesn't
+    const pipedInstances = [
+      'https://piped.video',
+      'https://piped.privacydev.net',
+      'https://piped.yt',
+      'https://piped.mha.fi'
+    ];
+    
+    for (const pipedInstance of pipedInstances) {
+      try {
+        const response = await fetch(`${pipedInstance}/api/v1/streams/${videoId}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(8000),
+        });
+        
+        if (!response.ok) continue;
+        
+        const pipedData = await response.json();
+        
+        // Convert Piped format to Invidious format
+        const invidiousFormatted = {
+          title: pipedData.title,
+          videoId: videoId,
+          lengthSeconds: pipedData.duration,
+          formatStreams: pipedData.videoStreams
+            .filter((stream: any) => stream.format.includes('video/mp4'))
+            .map((stream: any) => ({
+              url: stream.url,
+              resolution: stream.quality,
+              container: 'mp4',
+              encoding: 'h264'
+            })),
+          adaptiveFormats: [],
+          description: pipedData.description || '',
+          author: pipedData.uploader || 'Unknown',
+          authorId: pipedData.uploaderUrl?.split('/').pop() || '',
+          viewCount: pipedData.views,
+          hlsUrl: pipedData.hls || null,
+          directUrl: pipedData.videoStreams?.[0]?.url || null
+        };
+        
+        console.log(`Successfully loaded video data from Piped ${pipedInstance}`);
+        return invidiousFormatted;
+      } catch (error) {
+        console.error(`Error with Piped instance ${pipedInstance}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error with Piped fallback:', error);
+  }
+  
+  // If we get here, all instances failed
+  throw new Error(`Failed to fetch video details for ${videoId} from any Invidious or Piped instance`);
 }; 

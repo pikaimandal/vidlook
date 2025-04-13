@@ -58,67 +58,111 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         // Get direct video URLs from formats
         const urls: {[key: string]: string} = {}
         
-        // First try adaptive formats (better quality options)
-        if (videoData.adaptiveFormats && videoData.adaptiveFormats.length > 0) {
-          // Filter for video only formats (no audio)
-          const videoFormats = videoData.adaptiveFormats.filter(
-            (format: any) => format.type && format.type.startsWith('video/')
-          )
+        // Try format streams first (these have both audio and video)
+        if (videoData.formatStreams && videoData.formatStreams.length > 0) {
+          console.log("Using format streams for video playback");
           
-          // Sort by quality (resolution)
-          videoFormats.sort((a: any, b: any) => {
-            const resA = a.resolution ? parseInt(a.resolution.split('p')[0], 10) : 0
-            const resB = b.resolution ? parseInt(b.resolution.split('p')[0], 10) : 0
-            return resB - resA // Higher resolution first
-          })
-          
-          // Map qualities
-          for (const format of videoFormats) {
-            if (format.resolution) {
-              const quality = getQualityLabel(format.resolution)
-              if (quality && format.url) {
-                urls[quality] = format.url
+          for (const format of videoData.formatStreams) {
+            if (format.url) {
+              if (format.resolution === '1080p') {
+                urls['high'] = format.url;
+              } else if (format.resolution === '720p') {
+                urls['medium'] = format.url;
+              } else if (format.resolution === '480p' || format.resolution === '360p') {
+                urls['low'] = format.url;
+              } else if (format.resolution === '240p' || format.resolution === '144p') {
+                urls['lowest'] = format.url;
               }
             }
           }
+          
+          // If no specific resolutions were found, add all available formats
+          if (Object.keys(urls).length === 0) {
+            videoData.formatStreams.forEach((format: any, index: number) => {
+              if (format.url) {
+                const label = format.resolution || `quality-${index}`;
+                urls[label] = format.url;
+              }
+            });
+          }
         }
         
-        // Fallback to format streams if no adaptive formats
-        if (Object.keys(urls).length === 0 && videoData.formatStreams && videoData.formatStreams.length > 0) {
-          for (const format of videoData.formatStreams) {
-            if (format.resolution) {
-              const quality = getQualityLabel(format.resolution)
-              if (quality && format.url) {
-                urls[quality] = format.url
+        // Add adaptive formats if we don't have enough options (these usually require additional handling)
+        if (Object.keys(urls).length === 0 && videoData.adaptiveFormats && videoData.adaptiveFormats.length > 0) {
+          console.log("Using adaptive formats for video playback");
+          
+          // Get only formats that have both audio and video or are video only
+          const usableFormats = videoData.adaptiveFormats.filter(
+            (format: any) => format.url && 
+              (format.type.includes('video') || !format.encoding.includes('opus'))
+          );
+          
+          // Choose a few formats for different quality levels
+          for (const format of usableFormats) {
+            if (format.url) {
+              if (format.qualityLabel === '1080p' || format.qualityLabel === 'hd1080') {
+                urls['high'] = format.url;
+              } else if (format.qualityLabel === '720p' || format.qualityLabel === 'hd720') {
+                urls['medium'] = format.url;
+              } else if (format.qualityLabel === '480p' || format.qualityLabel === '360p') {
+                urls['low'] = format.url;
+              } else if (format.qualityLabel === '240p' || format.qualityLabel === '144p') {
+                urls['lowest'] = format.url;
               }
             }
+          }
+          
+          // If we still don't have any URLs, just use the first few formats
+          if (Object.keys(urls).length === 0 && usableFormats.length > 0) {
+            usableFormats.slice(0, 4).forEach((format: any, index: number) => {
+              if (format.url) {
+                const label = format.qualityLabel || `quality-${index}`;
+                urls[label] = format.url;
+              }
+            });
           }
         }
         
         // If we have HLS url, use that as a fallback
         if (videoData.hlsUrl) {
-          urls['hls'] = videoData.hlsUrl
+          console.log("Adding HLS URL as fallback");
+          urls['hls'] = videoData.hlsUrl;
         }
         
+        // Try using directUrl if available (some instances provide this)
+        if (videoData.directUrl) {
+          console.log("Adding direct URL");
+          urls['direct'] = videoData.directUrl;
+        }
+        
+        console.log("Available video formats:", Object.keys(urls));
+        
         if (Object.keys(urls).length === 0) {
+          console.error("No playable video formats found");
           setPlayerError(true)
-          console.error("No playable video formats found")
         } else {
           setDirectUrls(urls)
           
           // Determine best initial quality based on what's available
-          let initialQuality = 'medium'
-          if (urls['medium']) {
-            initialQuality = 'medium'
+          let initialQuality: string;
+          
+          // Prefer direct URL or HLS if available
+          if (urls['direct']) {
+            initialQuality = 'direct';
+          } else if (urls['hls']) {
+            initialQuality = 'hls';
+          } else if (urls['medium']) {
+            initialQuality = 'medium';
           } else if (urls['high']) {
-            initialQuality = 'high'
+            initialQuality = 'high';
           } else if (urls['low']) {
-            initialQuality = 'low'
+            initialQuality = 'low';
           } else {
             // Just use the first available quality
-            initialQuality = Object.keys(urls)[0]
+            initialQuality = Object.keys(urls)[0];
           }
           
+          console.log(`Selected initial quality: ${initialQuality}`);
           setCurrentQuality(initialQuality)
           setPlayerReady(true)
         }

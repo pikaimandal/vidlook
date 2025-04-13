@@ -21,10 +21,10 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         {/* Preload Invidious API instances for faster video loading */}
-        <link rel="preconnect" href="https://invidious.slipfox.xyz" />
-        <link rel="preconnect" href="https://invidious.privacydev.net" />
-        <link rel="dns-prefetch" href="https://invidious.slipfox.xyz" />
-        <link rel="dns-prefetch" href="https://invidious.privacydev.net" />
+        <link rel="preconnect" href="https://invidious.fdn.fr" />
+        <link rel="preconnect" href="https://inv.riverside.rocks" />
+        <link rel="dns-prefetch" href="https://invidious.fdn.fr" />
+        <link rel="dns-prefetch" href="https://inv.riverside.rocks" />
       </head>
       <body className={`${inter.className} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>

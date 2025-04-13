@@ -153,7 +153,7 @@ export default function VideoFeed() {
 
   // Initialize videos and preload common categories for better UX
   useEffect(() => {
-    handleCategoryChange("All");
+    handleCategoryChange("Trending");
     
     // Preload other categories in the background for faster navigation
     preloadCommonCategories().catch(console.error);
