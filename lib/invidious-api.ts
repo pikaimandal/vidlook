@@ -12,17 +12,87 @@ export interface Video {
   timestamp: string;
 }
 
+// We'll keep a smaller set of hardcoded videos as backup in case the API fails
+export const FALLBACK_VIDEOS: Record<string, Video[]> = {
+  Trending: [
+    {
+      id: "dQw4w9WgXcQ",
+      title: "Rick Astley - Never Gonna Give You Up (Official Music Video)",
+      channel: "Rick Astley",
+      views: "1.2B views",
+      timestamp: "14 years ago",
+    },
+    {
+      id: "9bZkp7q19f0",
+      title: "PSY - GANGNAM STYLE(강남스타일) M/V",
+      channel: "officialpsy",
+      views: "4.6B views",
+      timestamp: "11 years ago",
+    },
+    {
+      id: "JGwWNGJdvx8", 
+      title: "Ed Sheeran - Shape of You (Official Music Video)",
+      channel: "Ed Sheeran",
+      views: "5.9B views",
+      timestamp: "6 years ago",
+    }
+  ],
+  Gaming: [
+    {
+      id: "8X2kIfS6fb8",
+      title: "GTA 6 Trailer 1",
+      channel: "Rockstar Games",
+      views: "175M views",
+      timestamp: "4 months ago",
+    },
+    {
+      id: "AZYmIes2Xpw",
+      title: "Minecraft Live 2023: All Announcements",
+      channel: "Minecraft",
+      views: "12M views",
+      timestamp: "6 months ago",
+    }
+  ],
+  Music: [
+    {
+      id: "kJQP7kiw5Fk",
+      title: "Luis Fonsi - Despacito ft. Daddy Yankee",
+      channel: "Luis Fonsi",
+      views: "8.1B views",
+      timestamp: "7 years ago",
+    },
+    {
+      id: "RgKAFK5djSk",
+      title: "Wiz Khalifa - See You Again ft. Charlie Puth [Official Video]",
+      channel: "Wiz Khalifa",
+      views: "5.8B views",
+      timestamp: "8 years ago",
+    }
+  ],
+  All: [
+    {
+      id: "dQw4w9WgXcQ",
+      title: "Rick Astley - Never Gonna Give You Up (Official Music Video)",
+      channel: "Rick Astley",
+      views: "1.2B views",
+      timestamp: "14 years ago",
+    }
+  ]
+};
+
 // List of Invidious instances to use with fallback support
 // Source: https://api.invidious.io/instances.json (filtered for stable instances)
 const INVIDIOUS_INSTANCES = [
-  'https://invidious.fdn.fr',  // Fast, reliable French instance
-  'https://inv.riverside.rocks', // US-based reliable instance
-  'https://invidious.lunar.icu', // Reliable new instance
+  'https://yewtu.be',            // Very reliable German instance
+  'https://inv.nadeko.net',      // Reliable Chilean instance
+  'https://invidious.fdn.fr',    // Fast French instance
+  'https://vid.puffyan.us',      // US-based instance
+  'https://invidious.slipfox.xyz', // US-based instance
+  'https://inv.riverside.rocks', // US-based instance
   'https://invidious.nerdvpn.de', // German instance
-  'https://invidious.protokolla.fi', // Finnish instance
-  'https://invidious.private.coffee', // US-based instance
-  'https://iv.ggtyler.dev',     // US-based instance
-  'https://yt.drgnz.club'       // Singapore-based instance
+  'https://invidious.snopyta.org', // Finland-based instance
+  'https://inv.vern.cc',         // US-based instance
+  'https://y.com.sb'             // Netherlands-based instance
 ];
 
 // Cache mechanism to avoid repeated API calls
@@ -183,32 +253,153 @@ export const fetchVideosByCategory = async (
     return videoCache[cacheKey].slice(0, count);
   }
   
-  try {
-    let newVideos: Video[] = [];
-    const categoryPath = VIDEO_CATEGORIES[category as keyof typeof VIDEO_CATEGORIES] || 'trending';
-    
-    // Fetch videos from Invidious API
-    const data = await fetchFromInvidiousAPI(categoryPath, { region: 'US' });
-    
-    if (Array.isArray(data) && data.length > 0) {
-      newVideos = data.map((item: any) => formatInvidiousVideo(item));
-    } else {
-      console.warn(`No videos found for category ${category}`);
+  // Try each instance directly for faster response
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      console.log(`Trying to fetch ${category} videos from ${instance}`);
+      let categoryPath = '';
+      let params: Record<string, string> = { region: 'US' };
+      
+      // Determine the appropriate API endpoint based on category
+      if (category === 'Trending' || category === 'All') {
+        categoryPath = 'trending';
+      } else if (category === 'Music') {
+        categoryPath = 'trending';
+        params.type = 'music';
+      } else if (category === 'Gaming') {
+        categoryPath = 'trending';
+        params.type = 'gaming';
+      } else if (category === 'News') {
+        categoryPath = 'trending';
+        params.type = 'news';
+      } else if (category === 'Movies') {
+        categoryPath = 'trending';
+        params.type = 'movies';
+      } else {
+        // Default to trending
+        categoryPath = 'trending';
+      }
+
+      // Build the query string
+      const queryParams = new URLSearchParams(params);
+      const url = `${instance}/api/v1/${categoryPath}?${queryParams.toString()}`;
+      
+      // Fetch with a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+      
+      const response = await fetch(url, { 
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' }
+      });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        console.warn(`Error response from ${instance}: ${response.status}`);
+        continue; // Try next instance
+      }
+      
+      const data = await response.json();
+      
+      if (!Array.isArray(data) || data.length === 0) {
+        console.warn(`No videos found from ${instance} for ${category}`);
+        continue; // Try next instance
+      }
+      
+      // Format the response into our Video format
+      const newVideos = data.map((item: any) => formatInvidiousVideo(item));
+      
+      // Add new videos to cache
+      if (!videoCache[cacheKey]) {
+        videoCache[cacheKey] = [];
+      }
+      
+      videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+      cacheTimestamps[cacheKey] = Date.now();
+      
+      console.log(`Successfully loaded ${newVideos.length} videos for ${category} from ${instance}`);
+      return videoCache[cacheKey].slice(0, count);
+    } catch (error) {
+      console.error(`Error fetching videos from ${instance} for ${category}:`, error);
+      // Continue to the next instance
     }
+  }
+  
+  // If all instances failed, try to use Piped API as fallback
+  try {
+    console.log(`All Invidious instances failed for ${category}, trying Piped as fallback`);
+    const pipedInstances = [
+      'https://pipedapi.kavin.rocks',
+      'https://api.piped.projectsegfau.lt',
+      'https://api.piped.privacydev.net'
+    ];
     
-    // Add new videos to cache
+    for (const pipedInstance of pipedInstances) {
+      try {
+        // Piped uses different endpoints for trending/etc
+        let pipedEndpoint = 'trending';
+        
+        if (category === 'Music') pipedEndpoint = 'trending?region=music';
+        else if (category === 'Gaming') pipedEndpoint = 'trending?region=gaming';
+        else if (category === 'News') pipedEndpoint = 'trending?region=news';
+        else if (category === 'Movies') pipedEndpoint = 'trending?region=movies';
+        
+        const response = await fetch(`${pipedInstance}/${pipedEndpoint}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(8000)
+        });
+        
+        if (!response.ok) continue;
+        
+        const data = await response.json();
+        
+        if (!Array.isArray(data) || data.length === 0) continue;
+        
+        // Convert Piped format to our Video format
+        const newVideos = data.map((item: any) => ({
+          id: item.url.split('watch?v=')[1] || item.url.split('/').pop(),
+          title: item.title || "Untitled Video",
+          channel: item.uploaderName || "Unknown Channel",
+          views: formatViewCount(item.views || 0),
+          timestamp: item.uploadedDate || "",
+        }));
+        
+        // Add to cache
+        if (!videoCache[cacheKey]) {
+          videoCache[cacheKey] = [];
+        }
+        
+        videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+        cacheTimestamps[cacheKey] = Date.now();
+        
+        console.log(`Successfully loaded ${newVideos.length} videos from Piped ${pipedInstance}`);
+        return videoCache[cacheKey].slice(0, count);
+      } catch (error) {
+        console.error(`Error with Piped instance ${pipedInstance}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error with Piped fallback:', error);
+  }
+  
+  // If we still have no videos, check if we have any fallback videos
+  if (FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS]) {
+    console.log(`Using fallback videos for ${category}`);
+    const fallbackVideos = FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS];
+    
+    // Add fallback videos to cache
     if (!videoCache[cacheKey]) {
       videoCache[cacheKey] = [];
     }
     
-    videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
-    cacheTimestamps[cacheKey] = Date.now();
+    videoCache[cacheKey] = [...videoCache[cacheKey], ...fallbackVideos];
     
     return videoCache[cacheKey].slice(0, count);
-  } catch (error) {
-    console.error("Error fetching videos by category:", error);
-    throw error;
   }
+  
+  // If we reach here, all attempts failed
+  console.error(`Failed to fetch videos for ${category} from any source`);
+  throw new Error(`Failed to fetch videos for ${category}`);
 };
 
 // Function to fetch more videos (pagination)
@@ -221,17 +412,102 @@ export const fetchMoreVideos = async (
   try {
     const startIndex = videoCache[cacheKey] ? videoCache[cacheKey].length : 0;
     
-    // If we've already fetched all videos (no more pages)
-    if (nextPageTokens[cacheKey] === null && startIndex > 0) {
-      console.log(`No more videos to fetch for ${category}`);
-      return [];
+    // Try direct fetch from each instance with page parameter
+    for (const instance of INVIDIOUS_INSTANCES) {
+      try {
+        console.log(`Fetching more videos for ${category} from ${instance}`);
+        
+        // Determine the endpoint based on category
+        let categoryPath = '';
+        let params: Record<string, string> = { region: 'US' };
+        
+        if (category === 'Trending' || category === 'All') {
+          categoryPath = 'trending';
+        } else if (category === 'Music') {
+          categoryPath = 'trending';
+          params.type = 'music';
+        } else if (category === 'Gaming') {
+          categoryPath = 'trending';
+          params.type = 'gaming';
+        } else if (category === 'News') {
+          categoryPath = 'trending';
+          params.type = 'news';
+        } else if (category === 'Movies') {
+          categoryPath = 'trending';
+          params.type = 'movies';
+        } else {
+          categoryPath = 'trending';
+        }
+        
+        // Add popular videos for more content
+        const popularEndpoint = 'popular';
+        const popularParams = new URLSearchParams();
+        
+        // Fetch with a timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        
+        const response = await fetch(`${instance}/api/v1/${popularEndpoint}?${popularParams.toString()}`, {
+          signal: controller.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          console.warn(`Error loading more videos from ${instance}: ${response.status}`);
+          continue;
+        }
+        
+        const data = await response.json();
+        
+        if (!Array.isArray(data) || data.length === 0) {
+          console.warn(`No more videos found from ${instance}`);
+          continue;
+        }
+        
+        // Format response into our Video format
+        const newVideos = data.map((item: any) => formatInvidiousVideo(item));
+        
+        // Add to cache, ensuring we don't add duplicates
+        const existingIds = videoCache[cacheKey] ? videoCache[cacheKey].map(v => v.id) : [];
+        const uniqueNewVideos = newVideos.filter(v => !existingIds.includes(v.id));
+        
+        if (!videoCache[cacheKey]) {
+          videoCache[cacheKey] = [];
+        }
+        
+        if (uniqueNewVideos.length > 0) {
+          videoCache[cacheKey] = [...videoCache[cacheKey], ...uniqueNewVideos];
+          console.log(`Added ${uniqueNewVideos.length} more videos from ${instance}`);
+          return uniqueNewVideos.slice(0, count);
+        }
+      } catch (error) {
+        console.error(`Error fetching more videos from ${instance}:`, error);
+      }
     }
     
-    // Call the regular fetch function but with the page token
-    const allVideos = await fetchVideosByCategory(category, startIndex + count);
+    // If we get here, we couldn't load more videos from any instance
+    console.warn('Could not load more videos from any Invidious instance');
     
-    // Return only the new videos
-    return allVideos.slice(startIndex);
+    // Try to append some fallback videos if we haven't already used them all
+    if (FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS]) {
+      const fallbackVideos = FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS];
+      const existingIds = videoCache[cacheKey] ? videoCache[cacheKey].map(v => v.id) : [];
+      const unusedFallbacks = fallbackVideos.filter(v => !existingIds.includes(v.id));
+      
+      if (unusedFallbacks.length > 0) {
+        if (!videoCache[cacheKey]) {
+          videoCache[cacheKey] = [];
+        }
+        
+        videoCache[cacheKey] = [...videoCache[cacheKey], ...unusedFallbacks];
+        console.log(`Added ${unusedFallbacks.length} fallback videos`);
+        return unusedFallbacks.slice(0, count);
+      }
+    }
+    
+    // If we still have no more videos, return empty array
+    return [];
   } catch (error) {
     console.error("Error fetching more videos:", error);
     return [];
