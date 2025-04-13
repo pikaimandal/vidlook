@@ -256,8 +256,20 @@ export const fetchVideosByCategory = async (
     return videoCache[cacheKey].slice(0, count);
   }
   
+  // Set a request counter to limit the number of API attempts
+  let apiRequestsMade = 0;
+  const MAX_API_ATTEMPTS = 8; // Limit total API requests to prevent excessive retries
+  
   // Try each instance directly for faster response
   for (const instance of INVIDIOUS_INSTANCES) {
+    // Prevent excessive API calls
+    if (apiRequestsMade >= MAX_API_ATTEMPTS) {
+      console.warn(`Too many API requests made (${apiRequestsMade}), using fallback videos`);
+      break;
+    }
+    
+    apiRequestsMade++;
+    
     try {
       console.log(`Trying to fetch ${category} videos from ${instance}`);
       let categoryPath = '';
@@ -325,81 +337,95 @@ export const fetchVideosByCategory = async (
   }
   
   // If all instances failed, try to use Piped API as fallback
-  try {
-    console.log(`All Invidious instances failed for ${category}, trying Piped as fallback`);
-    const pipedInstances = [
-      'https://pipedapi.kavin.rocks',
-      'https://api.piped.projectsegfau.lt',
-      'https://api.piped.privacydev.net'
-    ];
-    
-    for (const pipedInstance of pipedInstances) {
-      try {
-        // Piped uses different endpoints for trending/etc
-        let pipedEndpoint = 'trending';
-        
-        if (category === 'Music') pipedEndpoint = 'trending?region=music';
-        else if (category === 'Gaming') pipedEndpoint = 'trending?region=gaming';
-        else if (category === 'News') pipedEndpoint = 'trending?region=news';
-        else if (category === 'Movies') pipedEndpoint = 'trending?region=movies';
-        
-        // Use our proxy endpoint instead of direct calls to avoid CORS issues
-        const targetUrl = `${pipedInstance}/${pipedEndpoint}`;
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
-        
-        const response = await fetch(proxyUrl);
-        
-        if (!response.ok) continue;
-        
-        const data = await response.json();
-        
-        if (!Array.isArray(data) || data.length === 0) continue;
-        
-        // Convert Piped format to our Video format
-        const newVideos = data.map((item: any) => ({
-          id: item.url.split('watch?v=')[1] || item.url.split('/').pop(),
-          title: item.title || "Untitled Video",
-          channel: item.uploaderName || "Unknown Channel",
-          views: formatViewCount(item.views || 0),
-          timestamp: item.uploadedDate || "",
-        }));
-        
-        // Add to cache
-        if (!videoCache[cacheKey]) {
-          videoCache[cacheKey] = [];
+  if (apiRequestsMade < MAX_API_ATTEMPTS) {
+    try {
+      console.log(`All Invidious instances failed for ${category}, trying Piped as fallback`);
+      const pipedInstances = [
+        'https://pipedapi.kavin.rocks',
+        'https://api.piped.projectsegfau.lt',
+        'https://api.piped.privacydev.net'
+      ];
+      
+      for (const pipedInstance of pipedInstances) {
+        // Prevent excessive API calls
+        if (apiRequestsMade >= MAX_API_ATTEMPTS) {
+          console.warn(`Too many API requests made (${apiRequestsMade}), using fallback videos`);
+          break;
         }
         
-        videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
-        cacheTimestamps[cacheKey] = Date.now();
+        apiRequestsMade++;
         
-        console.log(`Successfully loaded ${newVideos.length} videos from Piped ${pipedInstance}`);
-        return videoCache[cacheKey].slice(0, count);
-      } catch (error) {
-        console.error(`Error with Piped instance ${pipedInstance}:`, error);
+        try {
+          // Piped uses different endpoints for trending/etc
+          let pipedEndpoint = 'trending';
+          
+          if (category === 'Music') pipedEndpoint = 'trending?region=music';
+          else if (category === 'Gaming') pipedEndpoint = 'trending?region=gaming';
+          else if (category === 'News') pipedEndpoint = 'trending?region=news';
+          else if (category === 'Movies') pipedEndpoint = 'trending?region=movies';
+          
+          // Use our proxy endpoint instead of direct calls to avoid CORS issues
+          const targetUrl = `${pipedInstance}/${pipedEndpoint}`;
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+          
+          const response = await fetch(proxyUrl);
+          
+          if (!response.ok) continue;
+          
+          const data = await response.json();
+          
+          if (!Array.isArray(data) || data.length === 0) continue;
+          
+          // Convert Piped format to our Video format
+          const newVideos = data.map((item: any) => ({
+            id: item.url.split('watch?v=')[1] || item.url.split('/').pop(),
+            title: item.title || "Untitled Video",
+            channel: item.uploaderName || "Unknown Channel",
+            views: formatViewCount(item.views || 0),
+            timestamp: item.uploadedDate || "",
+          }));
+          
+          // Add to cache
+          if (!videoCache[cacheKey]) {
+            videoCache[cacheKey] = [];
+          }
+          
+          videoCache[cacheKey] = [...videoCache[cacheKey], ...newVideos];
+          cacheTimestamps[cacheKey] = Date.now();
+          
+          console.log(`Successfully loaded ${newVideos.length} videos from Piped ${pipedInstance}`);
+          return videoCache[cacheKey].slice(0, count);
+        } catch (error) {
+          console.error(`Error with Piped instance ${pipedInstance}:`, error);
+        }
       }
+    } catch (error) {
+      console.error('Error with Piped fallback:', error);
     }
-  } catch (error) {
-    console.error('Error with Piped fallback:', error);
   }
   
-  // If we still have no videos, check if we have any fallback videos
-  if (FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS]) {
-    console.log(`Using fallback videos for ${category}`);
-    const fallbackVideos = FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS];
+  // If we still have no videos, use our fallback videos
+  console.log(`Using fallback videos for ${category}`);
+  
+  // Get fallback videos for the requested category or use trending as default
+  const fallbackCategory = FALLBACK_VIDEOS[category as keyof typeof FALLBACK_VIDEOS] 
+    ? category as keyof typeof FALLBACK_VIDEOS 
+    : 'Trending';
     
-    // Add fallback videos to cache
-    if (!videoCache[cacheKey]) {
-      videoCache[cacheKey] = [];
-    }
-    
+  const fallbackVideos = FALLBACK_VIDEOS[fallbackCategory];
+  
+  // Add fallback videos to cache
+  if (!videoCache[cacheKey]) {
+    videoCache[cacheKey] = [];
+  }
+  
+  // Only add fallbacks if they're not already in the cache
+  if (videoCache[cacheKey].length === 0) {
     videoCache[cacheKey] = [...videoCache[cacheKey], ...fallbackVideos];
-    
-    return videoCache[cacheKey].slice(0, count);
   }
   
-  // If we reach here, all attempts failed
-  console.error(`Failed to fetch videos for ${category} from any source`);
-  throw new Error(`Failed to fetch videos for ${category}`);
+  // Return whatever videos we have - we should always have at least the fallbacks
+  return videoCache[cacheKey].slice(0, count);
 };
 
 // Function to fetch more videos (pagination)
@@ -622,7 +648,7 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
       
       // Use our proxy endpoint instead of direct calls to avoid CORS issues
       const targetUrl = `${instance}/api/v1/videos/${videoId}`;
-      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}&allowFallback=true`;
       
       // Fetch through our proxy
       const response = await fetch(proxyUrl, {
@@ -637,6 +663,12 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
       }
       
       const data = await response.json();
+      
+      // If we received fallback data from the proxy, return it directly
+      if (data && data.videoId === 'fallback') {
+        console.log('Using fallback video from proxy');
+        return data;
+      }
       
       // Verify we have necessary data
       if (!data || (!data.formatStreams && !data.adaptiveFormats)) {
@@ -700,13 +732,21 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
       try {
         // Use our proxy endpoint instead of direct calls to avoid CORS issues
         const targetUrl = `${pipedInstance}/streams/${videoId}`;
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}&allowFallback=true`;
         
         const response = await fetch(proxyUrl);
         
+        // Check if we got a fallback video from the proxy
+        const data = await response.json();
+        
+        if (data && data.videoId === 'fallback') {
+          console.log('Using fallback video from Piped proxy');
+          return data;
+        }
+        
         if (!response.ok) continue;
         
-        const pipedData = await response.json();
+        const pipedData = data;
         
         // Convert Piped format to Invidious format
         const invidiousFormatted = {
@@ -740,6 +780,26 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
     console.error('Error with Piped fallback:', error);
   }
   
-  // If we get here, all instances failed
-  throw new Error(`Failed to fetch video details for ${videoId} from any Invidious or Piped instance`);
+  // If we get here, all instances failed - use our local fallback
+  console.log('All API instances failed, using static fallback video');
+  
+  // Use static fallback video (Big Buck Bunny - open source video)
+  return {
+    formatStreams: [
+      {
+        url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        resolution: "720p",
+        container: "mp4",
+        encoding: "h264"
+      }
+    ],
+    title: `Video ${videoId} (API Unavailable)`,
+    videoId: videoId,
+    lengthSeconds: 596,
+    author: "Sample",
+    viewCount: 1000,
+    description: "This is a sample video shown when API connections fail",
+    hlsUrl: null,
+    directUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+  };
 }; 
