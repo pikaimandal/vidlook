@@ -156,11 +156,11 @@ const getInstance = async (): Promise<string> => {
     const instance = INVIDIOUS_INSTANCES[currentInstanceIndex];
     
     try {
-      // Simple health check - use a shorter timeout for faster response
-      const response = await fetch(`${instance}/api/v1/stats`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(2000) // 2s timeout for faster recovery
-      });
+      // Simple health check through our proxy to avoid CORS issues
+      const targetUrl = `${instance}/api/v1/stats`;
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=2000`;
+      
+      const response = await fetch(proxyUrl);
       
       if (response.ok) {
         return instance;
@@ -191,14 +191,13 @@ const fetchFromInvidiousAPI = async (endpoint: string, params: Record<string, st
   while (attemptsLeft > 0) {
     try {
       const instance = await getInstance();
-      const url = `${instance}/api/v1/${endpoint}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      const targetUrl = `${instance}/api/v1/${endpoint}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      
+      // Use our proxy endpoint instead of direct calls to avoid CORS issues
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
       
       // Fetch with timeout to avoid hanging requests - reduced timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout instead of 8s
-      
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      const response = await fetch(proxyUrl);
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -207,7 +206,7 @@ const fetchFromInvidiousAPI = async (endpoint: string, params: Record<string, st
       
       const data = await response.json();
       return data;
-    } catch (error) {
+    } catch (error: any) {
       lastError = error;
       attemptsLeft--;
       
@@ -286,17 +285,13 @@ export const fetchVideosByCategory = async (
 
       // Build the query string
       const queryParams = new URLSearchParams(params);
-      const url = `${instance}/api/v1/${categoryPath}?${queryParams.toString()}`;
+      const targetUrl = `${instance}/api/v1/${categoryPath}?${queryParams.toString()}`;
       
-      // Fetch with a timeout - reduced from 8s to 5s
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); 
+      // Use our proxy endpoint instead of direct calls to avoid CORS issues
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
       
-      const response = await fetch(url, { 
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' }
-      });
-      clearTimeout(timeoutId);
+      // Fetch with timeout through our proxy
+      const response = await fetch(proxyUrl);
       
       if (!response.ok) {
         console.warn(`Error response from ${instance}: ${response.status}`);
@@ -348,10 +343,11 @@ export const fetchVideosByCategory = async (
         else if (category === 'News') pipedEndpoint = 'trending?region=news';
         else if (category === 'Movies') pipedEndpoint = 'trending?region=movies';
         
-        const response = await fetch(`${pipedInstance}/${pipedEndpoint}`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(5000) // Reduced timeout
-        });
+        // Use our proxy endpoint instead of direct calls to avoid CORS issues
+        const targetUrl = `${pipedInstance}/${pipedEndpoint}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+        
+        const response = await fetch(proxyUrl);
         
         if (!response.ok) continue;
         
@@ -447,15 +443,12 @@ export const fetchMoreVideos = async (
         const popularEndpoint = 'popular';
         const popularParams = new URLSearchParams();
         
-        // Fetch with a timeout - reduced
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        // Use our proxy endpoint instead of direct calls to avoid CORS issues
+        const targetUrl = `${instance}/api/v1/${popularEndpoint}?${popularParams.toString()}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
         
-        const response = await fetch(`${instance}/api/v1/${popularEndpoint}?${popularParams.toString()}`, {
-          signal: controller.signal,
-          headers: { 'Accept': 'application/json' }
-        });
-        clearTimeout(timeoutId);
+        // Fetch through our proxy
+        const response = await fetch(proxyUrl);
         
         if (!response.ok) {
           console.warn(`Error loading more videos from ${instance}: ${response.status}`);
@@ -627,10 +620,12 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
     try {
       console.log(`Trying to fetch video ${videoId} from ${instance}`);
       
-      // Direct fetch to bypass our custom fetch function for debugging
-      const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000), // Reduced timeout
+      // Use our proxy endpoint instead of direct calls to avoid CORS issues
+      const targetUrl = `${instance}/api/v1/videos/${videoId}`;
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+      
+      // Fetch through our proxy
+      const response = await fetch(proxyUrl, {
         headers: {
           'Accept': 'application/json'
         }
@@ -703,10 +698,11 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
     
     for (const pipedInstance of pipedInstances) {
       try {
-        const response = await fetch(`${pipedInstance}/streams/${videoId}`, {
-          method: 'GET',
-          signal: AbortSignal.timeout(5000),
-        });
+        // Use our proxy endpoint instead of direct calls to avoid CORS issues
+        const targetUrl = `${pipedInstance}/streams/${videoId}`;
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&timeout=${INVIDIOUS_CONFIG.REQUEST_TIMEOUT}`;
+        
+        const response = await fetch(proxyUrl);
         
         if (!response.ok) continue;
         
