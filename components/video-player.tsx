@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, memo } from "react"
-import { Play, Pause, Volume2, VolumeX, AlertCircle, Loader2, Settings } from "lucide-react"
+import { Play, Pause, Volume2, VolumeX, AlertCircle, Loader2, Settings, RefreshCw } from "lucide-react"
 import { getVideoDetails } from "@/lib/invidious-api"
 import { INVIDIOUS_CONFIG } from "@/lib/config"
 
@@ -25,6 +25,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
   const [directUrls, setDirectUrls] = useState<{[key: string]: string}>({})
   const [currentQuality, setCurrentQuality] = useState<string>('medium')
   const [showQualityMenu, setShowQualityMenu] = useState(false)
+  const [errorRetryCount, setErrorRetryCount] = useState(0)
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -94,7 +95,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
           // Get only formats that have both audio and video or are video only
           const usableFormats = videoData.adaptiveFormats.filter(
             (format: any) => format.url && 
-              (format.type.includes('video') || !format.encoding.includes('opus'))
+              (format.type?.includes('video') || !format.encoding?.includes('opus'))
           );
           
           // Choose a few formats for different quality levels
@@ -189,7 +190,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
         clearInterval(checkIntervalRef.current)
       }
     }
-  }, [videoId])
+  }, [videoId, errorRetryCount])
 
   // Helper to map resolution to quality label
   const getQualityLabel = (resolution: string): string | null => {
@@ -435,13 +436,26 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
     }
   }
 
+  // Handle retry when video fails to load
+  const handleRetry = () => {
+    setPlayerError(false)
+    setErrorRetryCount(prev => prev + 1)
+    setIsLoading(true)
+  }
+
   return (
     <div ref={containerRef} className="relative">
-      <div className="video-container bg-black">
+      <div className="video-container bg-black w-full aspect-video">
         {playerError ? (
           <div className="w-full h-full bg-black flex items-center justify-center flex-col p-4">
             <AlertCircle className="h-8 w-8 text-red-500 mb-2" />
-            <p className="text-center text-sm">This video is unavailable. It may be private or removed.</p>
+            <p className="text-center text-sm mb-3">This video is unavailable. It may be private or removed.</p>
+            <button 
+              onClick={handleRetry}
+              className="flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90"
+            >
+              <RefreshCw className="h-4 w-4" /> Try Again
+            </button>
           </div>
         ) : (
           <>
@@ -469,26 +483,26 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
             <button
               onClick={togglePlay}
               disabled={playerError}
-              className={`w-8 h-8 flex items-center justify-center rounded-full ${
+              className={`w-10 h-10 flex items-center justify-center rounded-full ${
                 playerError 
                   ? "bg-gray-700 cursor-not-allowed" 
-                  : "bg-white/10 hover:bg-white/20"
+                  : "bg-white/20 hover:bg-white/30"
               }`}
             >
-              {isPlaying ? <Pause className="h-4 w-4 text-white" /> : <Play className="h-4 w-4 text-white" />}
+              {isPlaying ? <Pause className="h-5 w-5 text-white" /> : <Play className="h-5 w-5 text-white ml-1" />}
             </button>
             <button
               onClick={toggleMute}
               disabled={playerError}
-              className={`w-8 h-8 flex items-center justify-center rounded-full ${
+              className={`w-10 h-10 flex items-center justify-center rounded-full ${
                 playerError 
                   ? "bg-gray-700 cursor-not-allowed" 
-                  : "bg-white/10 hover:bg-white/20"
+                  : "bg-white/20 hover:bg-white/30"
               }`}
             >
-              {isMuted ? <VolumeX className="h-4 w-4 text-white" /> : <Volume2 className="h-4 w-4 text-white" />}
+              {isMuted ? <VolumeX className="h-5 w-5 text-white" /> : <Volume2 className="h-5 w-5 text-white" />}
             </button>
-            <div className="text-xs text-white/80">
+            <div className="text-sm text-white/90">
               {formatTime(currentTime)} / {formatTime(duration)}
             </div>
             
@@ -497,25 +511,25 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
               <button
                 onClick={() => setShowQualityMenu(!showQualityMenu)}
                 disabled={playerError || !playerReady}
-                className={`quality-button w-8 h-8 flex items-center justify-center rounded-full ${
+                className={`quality-button w-10 h-10 flex items-center justify-center rounded-full ${
                   playerError || !playerReady
                     ? "bg-gray-700 cursor-not-allowed" 
-                    : "bg-white/10 hover:bg-white/20"
+                    : "bg-white/20 hover:bg-white/30"
                 }`}
               >
-                <Settings className="h-4 w-4 text-white" />
+                <Settings className="h-5 w-5 text-white" />
               </button>
 
               {/* Quality menu */}
               {showQualityMenu && (
-                <div className="quality-menu absolute bottom-full left-0 mb-2 bg-black/90 rounded p-2 w-28 z-20 shadow-lg">
+                <div className="quality-menu absolute bottom-full left-0 mb-2 bg-black/95 rounded p-2 w-32 z-20 shadow-lg">
                   <p className="text-xs text-gray-400 mb-1 border-b border-gray-800 pb-1">Quality</p>
                   {Object.keys(directUrls).map(quality => (
                     <button 
                       key={quality}
                       onClick={() => changeQuality(quality)}
                       className={`block w-full text-left text-xs py-1 px-2 rounded hover:bg-white/10 ${
-                        quality === currentQuality ? 'text-primary' : 'text-white'
+                        quality === currentQuality ? 'text-primary font-bold' : 'text-white'
                       }`}
                     >
                       {quality === 'high' ? 'High (1080p)' 
@@ -523,6 +537,7 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
                         : quality === 'low' ? 'Low (480p)' 
                         : quality === 'lowest' ? 'Lowest (360p)'
                         : quality === 'hls' ? 'Auto (HLS)'
+                        : quality === 'direct' ? 'Direct'
                         : quality}
                     </button>
                   ))}
@@ -530,11 +545,11 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
               )}
             </div>
           </div>
-          <div className="text-xs text-white/80 bg-primary/80 px-2 py-1 rounded-full">+1 VIDEO per minute</div>
+          <div className="text-xs bg-primary/90 text-white px-2 py-1 rounded-full font-medium shadow-sm">+1 VIDEO per minute</div>
         </div>
 
         {/* Progress bar */}
-        <div className="w-full h-1 bg-white/20 mt-2 rounded-full overflow-hidden">
+        <div className="w-full h-2 bg-white/20 mt-2 rounded-full overflow-hidden">
           <div
             className="h-full bg-primary"
             style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}

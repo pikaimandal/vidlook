@@ -9,7 +9,7 @@ export const INVIDIOUS_CONFIG = {
   MAX_RETRIES: 3,
   
   // Timeout for API requests in milliseconds
-  REQUEST_TIMEOUT: 8000,
+  REQUEST_TIMEOUT: 5000,
   
   // Cache duration in milliseconds (15 minutes)
   CACHE_DURATION: 15 * 60 * 1000,

@@ -80,16 +80,16 @@ export const FALLBACK_VIDEOS: Record<string, Video[]> = {
   ]
 };
 
-// List of Invidious instances to use with fallback support
-// Source: https://api.invidious.io/instances.json (filtered for stable instances)
+// List of Invidious instances to use with fallback support - updated with most reliable ones
+// Source: https://api.invidious.io/ (filtered for best uptime)
 const INVIDIOUS_INSTANCES = [
-  'https://yewtu.be',            // Very reliable German instance
-  'https://inv.nadeko.net',      // Reliable Chilean instance
-  'https://invidious.fdn.fr',    // Fast French instance
+  'https://yewtu.be',            // Very reliable German instance (99.97% uptime)
+  'https://inv.nadeko.net',      // Reliable Chilean instance (98.69% uptime)
+  'https://invidious.nerdvpn.de', // German instance (99.96% uptime)
   'https://vid.puffyan.us',      // US-based instance
-  'https://invidious.slipfox.xyz', // US-based instance
+  'https://invidious.fdn.fr',    // Fast French instance
   'https://inv.riverside.rocks', // US-based instance
-  'https://invidious.nerdvpn.de', // German instance
+  'https://invidious.slipfox.xyz', // US-based instance
   'https://invidious.snopyta.org', // Finland-based instance
   'https://inv.vern.cc',         // US-based instance
   'https://y.com.sb'             // Netherlands-based instance
@@ -145,34 +145,38 @@ const isCacheExpired = (cacheKey: string): boolean => {
   return Date.now() - cacheTimestamps[cacheKey] > CACHE_EXPIRATION;
 };
 
-// Get a random working Invidious instance
+// Get a random working Invidious instance with improved error handling
 let currentInstanceIndex = 0;
 const getInstance = async (): Promise<string> => {
-  // Try the current instance first
-  const instance = INVIDIOUS_INSTANCES[currentInstanceIndex];
+  // Try multiple instances in sequence
+  let startIndex = currentInstanceIndex;
+  let instancesChecked = 0;
   
-  try {
-    // Simple health check
-    const response = await fetch(`${instance}/api/v1/stats`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(3000) // 3s timeout
-    });
+  while (instancesChecked < INVIDIOUS_INSTANCES.length) {
+    const instance = INVIDIOUS_INSTANCES[currentInstanceIndex];
     
-    if (response.ok) {
-      return instance;
+    try {
+      // Simple health check - use a shorter timeout for faster response
+      const response = await fetch(`${instance}/api/v1/stats`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(2000) // 2s timeout for faster recovery
+      });
+      
+      if (response.ok) {
+        return instance;
+      }
+    } catch (error) {
+      console.warn(`Invidious instance ${instance} is down, trying next...`);
     }
-  } catch (error) {
-    console.warn(`Invidious instance ${instance} is down, trying next...`);
-  }
-  
-  // Try the next instance if fallback is enabled
-  if (INVIDIOUS_CONFIG.ENABLE_FALLBACK) {
+    
+    // Move to the next instance
     currentInstanceIndex = (currentInstanceIndex + 1) % INVIDIOUS_INSTANCES.length;
-    return INVIDIOUS_INSTANCES[currentInstanceIndex];
+    instancesChecked++;
   }
   
-  // Return the current instance even if it failed (will likely fail again, but respects the config)
-  return instance;
+  // If all instances failed, return the first one (user will see an error)
+  console.error("All Invidious instances are down, using first instance as fallback");
+  return INVIDIOUS_INSTANCES[0];
 };
 
 // Enhanced fetch function with fallback to different instances
@@ -189,9 +193,9 @@ const fetchFromInvidiousAPI = async (endpoint: string, params: Record<string, st
       const instance = await getInstance();
       const url = `${instance}/api/v1/${endpoint}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
       
-      // Fetch with timeout to avoid hanging requests
+      // Fetch with timeout to avoid hanging requests - reduced timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), INVIDIOUS_CONFIG.REQUEST_TIMEOUT);
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout instead of 8s
       
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -215,7 +219,7 @@ const fetchFromInvidiousAPI = async (endpoint: string, params: Record<string, st
       
       // Wait a bit before trying again
       if (attemptsLeft > 0) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500)); // Shorter delay
       }
     }
   }
@@ -284,9 +288,9 @@ export const fetchVideosByCategory = async (
       const queryParams = new URLSearchParams(params);
       const url = `${instance}/api/v1/${categoryPath}?${queryParams.toString()}`;
       
-      // Fetch with a timeout
+      // Fetch with a timeout - reduced from 8s to 5s
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000); 
       
       const response = await fetch(url, { 
         signal: controller.signal,
@@ -346,7 +350,7 @@ export const fetchVideosByCategory = async (
         
         const response = await fetch(`${pipedInstance}/${pipedEndpoint}`, {
           method: 'GET',
-          signal: AbortSignal.timeout(8000)
+          signal: AbortSignal.timeout(5000) // Reduced timeout
         });
         
         if (!response.ok) continue;
@@ -443,9 +447,9 @@ export const fetchMoreVideos = async (
         const popularEndpoint = 'popular';
         const popularParams = new URLSearchParams();
         
-        // Fetch with a timeout
+        // Fetch with a timeout - reduced
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
         
         const response = await fetch(`${instance}/api/v1/${popularEndpoint}?${popularParams.toString()}`, {
           signal: controller.signal,
@@ -616,7 +620,7 @@ export const debouncedSearchVideos = (
   }, 300); // 300ms debounce
 };
 
-// Function to get video details by ID
+// Function to get video details by ID with improved error handling
 export const getVideoDetails = async (videoId: string): Promise<any> => {
   // Try each instance directly until one works
   for (const instance of INVIDIOUS_INSTANCES) {
@@ -626,7 +630,7 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
       // Direct fetch to bypass our custom fetch function for debugging
       const response = await fetch(`${instance}/api/v1/videos/${videoId}`, {
         method: 'GET',
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(5000), // Reduced timeout
         headers: {
           'Accept': 'application/json'
         }
@@ -691,17 +695,17 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
     
     // Piped instances are another YouTube frontend that might work when Invidious doesn't
     const pipedInstances = [
-      'https://piped.video',
-      'https://piped.privacydev.net',
-      'https://piped.yt',
-      'https://piped.mha.fi'
+      'https://piped-api.privacy.com.de',
+      'https://api.piped.projectsegfau.lt',
+      'https://piped-api.garudalinux.org',
+      'https://pipedapi.kavin.rocks'
     ];
     
     for (const pipedInstance of pipedInstances) {
       try {
-        const response = await fetch(`${pipedInstance}/api/v1/streams/${videoId}`, {
+        const response = await fetch(`${pipedInstance}/streams/${videoId}`, {
           method: 'GET',
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(5000),
         });
         
         if (!response.ok) continue;
@@ -714,7 +718,7 @@ export const getVideoDetails = async (videoId: string): Promise<any> => {
           videoId: videoId,
           lengthSeconds: pipedData.duration,
           formatStreams: pipedData.videoStreams
-            .filter((stream: any) => stream.format.includes('video/mp4'))
+            .filter((stream: any) => stream.format?.includes('video/mp4'))
             .map((stream: any) => ({
               url: stream.url,
               resolution: stream.quality,

@@ -324,27 +324,27 @@ export default function VideoFeed() {
           </button>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {videos.map((video, index) => (
             <Card
               key={`${video.id}-${index}-${retryCount}`}
-              className={`video-card bg-secondary/30 border-none overflow-hidden ${
+              className={`video-card bg-secondary/30 border-none overflow-hidden shadow-md hover:shadow-lg transition-shadow ${
                 currentVideoIndex === index ? "ring-2 ring-primary" : ""
               }`}
               onClick={() => setCurrentVideoIndex(index)}
             >
               <CardContent className="p-0">
-                <div className="aspect-video relative">
+                <div className="relative w-full">
                   <VideoPlayer
                     videoId={video.id}
                     isActive={currentVideoIndex === index}
                     onVideoEnd={handleVideoEnd}
                   />
                 </div>
-                <div className="p-3">
-                  <h3 className="font-medium mb-1 line-clamp-2">{video.title}</h3>
+                <div className="p-4">
+                  <h3 className="font-medium text-base mb-2 line-clamp-2">{video.title}</h3>
                   <div className="flex flex-col">
-                    <span className="text-sm text-gray-400">{video.channel}</span>
+                    <span className="text-sm text-gray-400 mb-1">{video.channel}</span>
                     <div className="flex items-center text-xs text-gray-500">
                       <span>{video.views}</span>
                       <span className="mx-1">•</span>
@@ -357,9 +357,9 @@ export default function VideoFeed() {
           ))}
 
           {/* Loading indicator at the bottom for infinite scroll */}
-          <div ref={lastVideoElementRef} className="h-8 flex justify-center">
+          <div ref={lastVideoElementRef} className="col-span-full h-16 flex justify-center items-center">
             {loadingMore && hasMoreVideos && (
-              <div className="w-6 h-6 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+              <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
             )}
           </div>
         </div>
