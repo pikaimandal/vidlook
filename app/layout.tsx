@@ -6,9 +6,10 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata = {
-  title: "VidLook - Watch YouTube Videos and Earn",
-  description: "Watch YouTube videos and earn VIDEO tokens",
-    generator: 'v0.dev'
+  title: 'VidLook - Watch Videos and Earn VIDEO Tokens',
+  description: 'VidLook is a Worldcoin mini-app where you can watch videos and earn VIDEO tokens, powered by Invidious API.',
+  keywords: ['Worldcoin', 'mini-app', 'VidLook', 'VIDEO tokens', 'video', 'earn', 'Invidious'],
+  generator: 'v0.dev'
 }
 
 export default function RootLayout({
@@ -19,12 +20,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Preload YouTube API for faster video loading */}
-        <link rel="preconnect" href="https://www.youtube.com" />
-        <link rel="preconnect" href="https://www.googleapis.com" />
-        <link rel="dns-prefetch" href="https://www.youtube.com" />
-        <link rel="dns-prefetch" href="https://www.googleapis.com" />
-        <script async src="https://www.youtube.com/iframe_api" />
+        {/* Preload Invidious API instances for faster video loading */}
+        <link rel="preconnect" href="https://invidious.slipfox.xyz" />
+        <link rel="preconnect" href="https://invidious.privacydev.net" />
+        <link rel="dns-prefetch" href="https://invidious.slipfox.xyz" />
+        <link rel="dns-prefetch" href="https://invidious.privacydev.net" />
       </head>
       <body className={`${inter.className} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>

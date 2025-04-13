@@ -12,7 +12,7 @@ import {
   fetchMoreSearchResults,
   preloadCommonCategories,
   type Video
-} from "@/lib/youtube-api"
+} from "@/lib/invidious-api"
 
 // We'll keep a smaller set of hardcoded videos as backup in case the API fails
 const FALLBACK_VIDEOS = {

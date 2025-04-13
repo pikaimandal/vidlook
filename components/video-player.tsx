@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState, memo } from "react"
-import { Play, Pause, Volume2, VolumeX, AlertCircle } from "lucide-react"
+import { Play, Pause, Volume2, VolumeX, AlertCircle, Loader2, Settings } from "lucide-react"
+import { getVideoDetails } from "@/lib/invidious-api"
+import { INVIDIOUS_CONFIG } from "@/lib/config"
 
 interface VideoPlayerProps {
   videoId: string
@@ -9,45 +11,8 @@ interface VideoPlayerProps {
   onVideoEnd: () => void
 }
 
-// Declare YT as a global variable to satisfy TypeScript
-declare global {
-  interface Window {
-    onYouTubeIframeAPIReady: (() => void) | null
-    // Use any for YT to avoid type conflicts with YouTube API
-    YT: any
-    ytApiReady?: boolean // Optional flag to track API readiness
-  }
-}
-
 // Create a custom event for token updates
 const tokenUpdateEvent = new Event("tokenUpdate")
-
-// Initialize YouTube API once for all players
-const initializeYouTubeAPI = () => {
-  if (window.YT) {
-    window.ytApiReady = true;
-    return Promise.resolve();
-  }
-  
-  return new Promise<void>((resolve) => {
-    // Add callback that will be called when API is loaded
-    window.onYouTubeIframeAPIReady = () => {
-      window.ytApiReady = true;
-      resolve();
-    };
-    
-    // Add YouTube API script if it doesn't exist
-    const tag = document.createElement("script");
-    tag.src = "https://www.youtube.com/iframe_api";
-    const firstScriptTag = document.getElementsByTagName("script")[0];
-    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-  });
-};
-
-// Call this on app initialization
-if (typeof window !== 'undefined') {
-  initializeYouTubeAPI();
-}
 
 function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -57,270 +22,373 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
   const [playerReady, setPlayerReady] = useState(false)
   const [playerError, setPlayerError] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const videoRef = useRef<HTMLDivElement>(null)
-  const playerRef = useRef<any>(null)
+  const [directUrls, setDirectUrls] = useState<{[key: string]: string}>({})
+  const [currentQuality, setCurrentQuality] = useState<string>('medium')
+  const [showQualityMenu, setShowQualityMenu] = useState(false)
+  
+  const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const tokenTimerRef = useRef<NodeJS.Timeout | null>(null)
   const lastTokenTimeRef = useRef<number>(0)
   const videoIdRef = useRef<string>(videoId) // Add a ref to track videoId changes
+  const checkIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Initialize player when component mounts or videoId changes
+  // Load video data and sources from Invidious API
   useEffect(() => {
-    let isMounted = true;
-    videoIdRef.current = videoId; // Update the ref
-    setPlayerError(false);
-    setIsLoading(true);
+    let isMounted = true
+    videoIdRef.current = videoId
+    setPlayerError(false)
+    setIsLoading(true)
+    setIsPlaying(false)
+    setCurrentTime(0)
     
-    // Always initialize all videos to ensure they're ready to play
-    // This fixes the issue where videos below the first one weren't loading
-    
-    const initPlayer = async () => {
-      if (!videoRef.current || !isMounted) return;
+    const loadVideo = async () => {
+      if (!isMounted) return
       
       try {
-        // Wait for YouTube API to be ready
-        if (!window.ytApiReady) {
-          await initializeYouTubeAPI();
+        const videoData = await getVideoDetails(videoId)
+        
+        if (!isMounted) return
+        
+        // Set video duration
+        if (videoData.lengthSeconds) {
+          setDuration(videoData.lengthSeconds)
         }
         
-        // Check if we already have a player initialized with this ID
-        if (playerRef.current && playerRef.current.getVideoData && playerRef.current.getVideoData().video_id === videoId) {
-          // Player already initialized with this video, just set ready
-          setPlayerReady(true);
-          setIsLoading(false);
-          return;
+        // Get direct video URLs from formats
+        const urls: {[key: string]: string} = {}
+        
+        // First try adaptive formats (better quality options)
+        if (videoData.adaptiveFormats && videoData.adaptiveFormats.length > 0) {
+          // Filter for video only formats (no audio)
+          const videoFormats = videoData.adaptiveFormats.filter(
+            (format: any) => format.type && format.type.startsWith('video/')
+          )
+          
+          // Sort by quality (resolution)
+          videoFormats.sort((a: any, b: any) => {
+            const resA = a.resolution ? parseInt(a.resolution.split('p')[0], 10) : 0
+            const resB = b.resolution ? parseInt(b.resolution.split('p')[0], 10) : 0
+            return resB - resA // Higher resolution first
+          })
+          
+          // Map qualities
+          for (const format of videoFormats) {
+            if (format.resolution) {
+              const quality = getQualityLabel(format.resolution)
+              if (quality && format.url) {
+                urls[quality] = format.url
+              }
+            }
+          }
         }
         
-        // Ensure we have a valid video ID
-        if (!videoId || videoId.length < 11) {
-          console.error("Invalid video ID:", videoId);
-          setPlayerError(true);
-          setIsLoading(false);
-          return;
+        // Fallback to format streams if no adaptive formats
+        if (Object.keys(urls).length === 0 && videoData.formatStreams && videoData.formatStreams.length > 0) {
+          for (const format of videoData.formatStreams) {
+            if (format.resolution) {
+              const quality = getQualityLabel(format.resolution)
+              if (quality && format.url) {
+                urls[quality] = format.url
+              }
+            }
+          }
         }
         
-        // Create a div element for the player
-        const playerElement = document.createElement("div");
-        playerElement.id = `youtube-player-${videoId}`;
-        videoRef.current.innerHTML = "";
-        videoRef.current.appendChild(playerElement);
+        // If we have HLS url, use that as a fallback
+        if (videoData.hlsUrl) {
+          urls['hls'] = videoData.hlsUrl
+        }
         
-        // Create player with optimized options for faster loading
-        playerRef.current = new window.YT.Player(playerElement.id, {
-          height: "100%",
-          width: "100%",
-          videoId: videoId,
-          playerVars: {
-            autoplay: 0,
-            controls: 0,
-            disablekb: 0,
-            enablejsapi: 1,
-            fs: 1,
-            iv_load_policy: 3, // Hide video annotations
-            modestbranding: 1,
-            rel: 0, // Don't show related videos
-            showinfo: 0,
-            playsinline: 1,
-            hl: 'en', // Set language to English
-            cc_load_policy: 0, // Hide closed captions by default
-          },
-          events: {
-            onReady: onPlayerReady,
-            onStateChange: onPlayerStateChange,
-            onError: onPlayerError,
-          },
-        });
+        if (Object.keys(urls).length === 0) {
+          setPlayerError(true)
+          console.error("No playable video formats found")
+        } else {
+          setDirectUrls(urls)
+          
+          // Determine best initial quality based on what's available
+          let initialQuality = 'medium'
+          if (urls['medium']) {
+            initialQuality = 'medium'
+          } else if (urls['high']) {
+            initialQuality = 'high'
+          } else if (urls['low']) {
+            initialQuality = 'low'
+          } else {
+            // Just use the first available quality
+            initialQuality = Object.keys(urls)[0]
+          }
+          
+          setCurrentQuality(initialQuality)
+          setPlayerReady(true)
+        }
+        
+        setIsLoading(false)
       } catch (error) {
-        console.error("Error initializing YouTube player:", error);
+        console.error("Error loading video from Invidious:", error)
         if (isMounted) {
-          setPlayerError(true);
-          setIsLoading(false);
+          setPlayerError(true)
+          setIsLoading(false)
         }
       }
-    };
+    }
     
-    // Initialize immediately for all videos with a small stagger
-    const initTimeout = setTimeout(() => {
-      initPlayer();
-    }, 100); // Small delay to prevent overwhelming the browser
+    loadVideo()
     
     return () => {
-      isMounted = false;
-      clearTimeout(initTimeout);
+      isMounted = false
       // Clean up
       if (tokenTimerRef.current) {
-        clearInterval(tokenTimerRef.current);
+        clearInterval(tokenTimerRef.current)
       }
-    };
-  }, [videoId]);
-
-  // Add a separate effect to handle when isActive changes
-  useEffect(() => {
-    if (isActive && playerRef.current && playerReady) {
-      // If this is now the active video and player is ready
-      playerRef.current.cueVideoById(videoId);
+      if (checkIntervalRef.current) {
+        clearInterval(checkIntervalRef.current)
+      }
     }
-  }, [isActive, playerReady, videoId]);
+  }, [videoId])
 
-  const onPlayerReady = (event: any) => {
-    setPlayerReady(true);
-    setDuration(event.target.getDuration());
-    setIsLoading(false);
+  // Helper to map resolution to quality label
+  const getQualityLabel = (resolution: string): string | null => {
+    const res = parseInt(resolution.split('p')[0], 10)
+    if (res >= 1080) return 'high'
+    if (res >= 720) return 'medium'
+    if (res >= 360) return 'low'
+    if (res >= 240) return 'lowest'
+    return null
+  }
 
+  // Handle video element events
+  useEffect(() => {
+    if (!videoRef.current || !playerReady || !isActive) return
+    
+    const video = videoRef.current
+    
+    const handlePlay = () => {
+      setIsPlaying(true)
+      startTokenTimer()
+    }
+    
+    const handlePause = () => {
+      setIsPlaying(false)
+      stopTokenTimer()
+    }
+    
+    const handleEnded = () => {
+      setIsPlaying(false)
+      stopTokenTimer()
+      onVideoEnd()
+    }
+    
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime)
+    }
+    
+    const handleError = (e: any) => {
+      console.error("Video playback error:", e)
+      setPlayerError(true)
+      stopTokenTimer()
+    }
+    
+    // Add event listeners
+    video.addEventListener('play', handlePlay)
+    video.addEventListener('pause', handlePause)
+    video.addEventListener('ended', handleEnded)
+    video.addEventListener('timeupdate', handleTimeUpdate)
+    video.addEventListener('error', handleError)
+    
     // Set initial mute state
-    if (isMuted) {
-      event.target.mute();
-    } else {
-      event.target.unMute();
-    }
+    video.muted = isMuted
     
-    // Preload video for better performance if active
-    if (isActive) {
-      event.target.cueVideoById(videoId);
+    return () => {
+      // Remove event listeners
+      video.removeEventListener('play', handlePlay)
+      video.removeEventListener('pause', handlePause)
+      video.removeEventListener('ended', handleEnded)
+      video.removeEventListener('timeupdate', handleTimeUpdate)
+      video.removeEventListener('error', handleError)
     }
-  }
+  }, [playerReady, isActive, isMuted, onVideoEnd])
 
-  const onPlayerStateChange = (event: any) => {
-    const playerState = event.data;
-
-    // Update playing state
-    setIsPlaying(playerState === window.YT.PlayerState.PLAYING);
-    
-    // Hide loading indicator when video starts playing or is paused
-    if (playerState === window.YT.PlayerState.PLAYING || 
-        playerState === window.YT.PlayerState.PAUSED) {
-      setIsLoading(false);
-    }
-
-    // Handle video end
-    if (playerState === window.YT.PlayerState.ENDED) {
-      stopTokenTimer();
-      onVideoEnd();
-    }
-
-    // Start/stop token timer based on play state
-    if (playerState === window.YT.PlayerState.PLAYING) {
-      startTokenTimer();
-    } else {
-      stopTokenTimer();
-    }
-  }
-
-  const onPlayerError = (event: any) => {
-    console.error("YouTube player error:", event.data);
-    setPlayerError(true);
-    setIsLoading(false);
-    stopTokenTimer();
-  }
-
-  // Handle intersection observer to load/unload videos when in viewport
+  // Handle playing when active status changes
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (isActive && videoRef.current && playerReady && directUrls[currentQuality]) {
+      // If this is now the active video and player is ready
+      if (!videoRef.current.paused) {
+        // If already playing, do nothing
+        return
+      }
+      
+      // Preload but don't autoplay
+      videoRef.current.load()
+    } else if (!isActive && videoRef.current && isPlaying) {
+      // If no longer active but playing, pause
+      videoRef.current.pause()
+    }
+  }, [isActive, playerReady, isPlaying, directUrls, currentQuality])
+
+  // Update video source when quality changes
+  useEffect(() => {
+    if (videoRef.current && playerReady && directUrls[currentQuality]) {
+      const wasPlaying = !videoRef.current.paused
+      const currentVideoTime = videoRef.current.currentTime
+      
+      // Set new source
+      videoRef.current.src = directUrls[currentQuality]
+      videoRef.current.load()
+      
+      // Restore time
+      videoRef.current.currentTime = currentVideoTime
+      
+      // Resume if it was playing
+      if (wasPlaying && isActive) {
+        const playPromise = videoRef.current.play()
+        if (playPromise !== undefined) {
+          playPromise.catch(e => {
+            console.error("Error resuming playback after quality change:", e)
+          })
+        }
+      }
+    }
+  }, [currentQuality, playerReady, directUrls, isActive])
+
+  // Handle intersection observer
+  useEffect(() => {
+    if (!containerRef.current) return
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting && isActive && playerRef.current && playerReady) {
+          if (entry.isIntersecting && isActive && videoRef.current && playerReady) {
             // When element becomes visible and is the active video
-            if (!isPlaying) {
-              // Don't autoplay, just make sure it's loaded
-              setCurrentTime(playerRef.current?.getCurrentTime() || 0);
+            if (!isPlaying && directUrls[currentQuality]) {
+              // Load but don't autoplay
+              videoRef.current.load()
             }
-          } else if (!entry.isIntersecting && playerRef.current && isPlaying) {
+          } else if (!entry.isIntersecting && videoRef.current && isPlaying) {
             // If not visible and playing, pause to save resources
-            playerRef.current.pauseVideo();
+            videoRef.current.pause()
           }
-        });
+        })
       },
       { threshold: 0.3 }
-    );
+    )
 
-    observer.observe(containerRef.current);
+    observer.observe(containerRef.current)
 
     return () => {
-      observer.disconnect();
-    };
-  }, [isActive, playerReady, isPlaying]);
+      observer.disconnect()
+    }
+  }, [isActive, playerReady, isPlaying, directUrls, currentQuality])
 
-  // Update current time while playing
+  // Handle clicks outside quality menu to close it
   useEffect(() => {
-    if (!isPlaying || !playerReady) return;
-
-    const interval = setInterval(() => {
-      if (playerRef.current) {
-        setCurrentTime(playerRef.current.getCurrentTime());
+    if (!showQualityMenu) return
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        event.target instanceof Element && 
+        !event.target.closest('.quality-menu') && 
+        !event.target.closest('.quality-button')
+      ) {
+        setShowQualityMenu(false)
       }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, playerReady]);
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside)
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showQualityMenu])
 
   // Token timer functions
   const startTokenTimer = () => {
-    if (tokenTimerRef.current) return;
+    if (tokenTimerRef.current) return
 
     // Record the start time
-    lastTokenTimeRef.current = Math.floor(Date.now() / 1000);
+    lastTokenTimeRef.current = Math.floor(Date.now() / 1000)
 
     tokenTimerRef.current = setInterval(() => {
-      const now = Math.floor(Date.now() / 1000);
-      const watchedSeconds = now - lastTokenTimeRef.current;
+      const now = Math.floor(Date.now() / 1000)
+      const watchedSeconds = now - lastTokenTimeRef.current
 
       // Award 1 token per minute (60 seconds)
       if (watchedSeconds >= 60) {
-        const tokensToAward = Math.floor(watchedSeconds / 60);
+        const tokensToAward = Math.floor(watchedSeconds / 60)
 
         // Update tokens in localStorage
-        const userData = localStorage.getItem("user");
+        const userData = localStorage.getItem("user")
         if (userData) {
-          const user = JSON.parse(userData);
-          user.tokens += tokensToAward;
-          localStorage.setItem("user", JSON.stringify(user));
+          const user = JSON.parse(userData)
+          user.tokens += tokensToAward
+          localStorage.setItem("user", JSON.stringify(user))
 
           // Dispatch event to update UI
-          window.dispatchEvent(tokenUpdateEvent);
+          window.dispatchEvent(tokenUpdateEvent)
         }
 
         // Reset the timer
-        lastTokenTimeRef.current = now - (watchedSeconds % 60);
+        lastTokenTimeRef.current = now - (watchedSeconds % 60)
       }
-    }, 5000); // Check every 5 seconds
+    }, 5000) // Check every 5 seconds
   }
 
   const stopTokenTimer = () => {
     if (tokenTimerRef.current) {
-      clearInterval(tokenTimerRef.current);
-      tokenTimerRef.current = null;
+      clearInterval(tokenTimerRef.current)
+      tokenTimerRef.current = null
     }
   }
 
   const togglePlay = () => {
-    if (!playerRef.current || !playerReady || playerError) return;
+    if (!videoRef.current || !playerReady || playerError) return
 
     if (isPlaying) {
-      playerRef.current.pauseVideo();
+      videoRef.current.pause()
     } else {
-      setIsLoading(true);
-      playerRef.current.playVideo();
+      setIsLoading(true)
+      const playPromise = videoRef.current.play()
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsLoading(false)
+          })
+          .catch(error => {
+            console.error("Play error:", error)
+            setIsLoading(false)
+            // If autoplay was prevented, we can try again with user interaction
+            if (error.name === "NotAllowedError") {
+              console.warn("Autoplay prevented, user must interact")
+            }
+          })
+      }
     }
   }
 
   const toggleMute = () => {
-    if (!playerRef.current || !playerReady || playerError) return;
+    if (!videoRef.current || !playerReady || playerError) return
 
     if (isMuted) {
-      playerRef.current.unMute();
-      setIsMuted(false);
+      videoRef.current.muted = false
+      setIsMuted(false)
     } else {
-      playerRef.current.mute();
-      setIsMuted(true);
+      videoRef.current.muted = true
+      setIsMuted(true)
     }
   }
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs < 10 ? "0" : ""}${secs}`
+  }
+
+  // Quality change handler
+  const changeQuality = (quality: string) => {
+    if (quality !== currentQuality && directUrls[quality]) {
+      setCurrentQuality(quality)
+      setShowQualityMenu(false)
+    }
   }
 
   return (
@@ -333,10 +401,17 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
           </div>
         ) : (
           <>
-            <div ref={videoRef} className="w-full h-full"></div>
+            <video 
+              ref={videoRef}
+              className="w-full h-full"
+              preload="metadata"
+              playsInline
+              src={playerReady ? directUrls[currentQuality] : undefined}
+            />
+            
             {isActive && isLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
               </div>
             )}
           </>
@@ -371,6 +446,44 @@ function VideoPlayerComponent({ videoId, isActive, onVideoEnd }: VideoPlayerProp
             </button>
             <div className="text-xs text-white/80">
               {formatTime(currentTime)} / {formatTime(duration)}
+            </div>
+            
+            {/* Quality selection button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowQualityMenu(!showQualityMenu)}
+                disabled={playerError || !playerReady}
+                className={`quality-button w-8 h-8 flex items-center justify-center rounded-full ${
+                  playerError || !playerReady
+                    ? "bg-gray-700 cursor-not-allowed" 
+                    : "bg-white/10 hover:bg-white/20"
+                }`}
+              >
+                <Settings className="h-4 w-4 text-white" />
+              </button>
+
+              {/* Quality menu */}
+              {showQualityMenu && (
+                <div className="quality-menu absolute bottom-full left-0 mb-2 bg-black/90 rounded p-2 w-28 z-20 shadow-lg">
+                  <p className="text-xs text-gray-400 mb-1 border-b border-gray-800 pb-1">Quality</p>
+                  {Object.keys(directUrls).map(quality => (
+                    <button 
+                      key={quality}
+                      onClick={() => changeQuality(quality)}
+                      className={`block w-full text-left text-xs py-1 px-2 rounded hover:bg-white/10 ${
+                        quality === currentQuality ? 'text-primary' : 'text-white'
+                      }`}
+                    >
+                      {quality === 'high' ? 'High (1080p)' 
+                        : quality === 'medium' ? 'Medium (720p)' 
+                        : quality === 'low' ? 'Low (480p)' 
+                        : quality === 'lowest' ? 'Lowest (360p)'
+                        : quality === 'hls' ? 'Auto (HLS)'
+                        : quality}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <div className="text-xs text-white/80 bg-primary/80 px-2 py-1 rounded-full">+1 VIDEO per minute</div>
